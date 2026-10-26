@@ -129,6 +129,12 @@ def execute_doctor_action(
 
     db.commit()
     db.refresh(study)
+
+    # Picu transmisi Bundle HL7 FHIR R4 ke SATUSEHAT secara idempoten
+    if action_upper in ["SETUJUI", "EDIT"]:
+        from app.services.fhir_builder import transmit_fhir_bundle_to_satusehat
+        transmit_fhir_bundle_to_satusehat(db, study)
+
     return study
 
 def seed_initial_studies_if_empty(db: Session):

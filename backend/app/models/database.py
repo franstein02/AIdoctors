@@ -4,6 +4,7 @@ from sqlalchemy import (
     String, 
     Float, 
     Integer, 
+    Boolean,
     Text, 
     DateTime, 
     JSON, 
@@ -111,4 +112,38 @@ class AuditLog(Base):
             "event_type": self.event_type,
             "user": self.user,
             "keterangan": self.keterangan
+        }
+
+class FhirTransmissionLog(Base):
+    """
+    Model Tabel Log Transmisi SATUSEHAT:
+    Merekam riwayat pengiriman, status HTTP, idempoten key, retry count, dan timestamp.
+    """
+    __tablename__ = "fhir_transmission_logs"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    study_uid = Column(String(128), ForeignKey("radiology_studies.study_uid", ondelete="CASCADE"), nullable=False, index=True)
+    bundle_id = Column(String(128), nullable=False)
+    idempotency_key = Column(String(128), nullable=False, index=True)
+    http_status = Column(String(64), nullable=False, default="HTTP 200 OK (Idempoten)")
+    status_code = Column(Integer, nullable=False, default=200)
+    is_idempotent = Column(Boolean, nullable=False, default=True)
+    retry_count = Column(Integer, nullable=False, default=0)
+    endpoint_target = Column(String(255), nullable=False)
+    response_summary = Column(Text, nullable=False)
+    timestamp = Column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "study_uid": self.study_uid,
+            "bundle_id": self.bundle_id,
+            "idempotency_key": self.idempotency_key,
+            "http_status": self.http_status,
+            "status_code": self.status_code,
+            "is_idempotent": self.is_idempotent,
+            "retry_count": self.retry_count,
+            "endpoint_target": self.endpoint_target,
+            "response_summary": self.response_summary,
+            "timestamp": self.timestamp.isoformat() if self.timestamp else None
         }
