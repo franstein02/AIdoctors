@@ -21,7 +21,7 @@ import {
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { apiService } from '../services/api';
-import DicomCanvasViewer from '../components/DicomCanvasViewer';
+import MedicalViewer from '../components/MedicalViewer';
 import { INITIAL_PATIENTS } from '../data/mockData';
 
 export default function CaseDetail({
@@ -77,11 +77,12 @@ export default function CaseDetail({
       const data = await apiService.getCaseDetail(targetUid);
       setCaseData(data);
       setDraftText(formatDraftText(data.draf_laporan));
-      setCurrentSlice(
-        Array.isArray(data.irisan_kunci) && data.irisan_kunci.length > 0
-          ? (typeof data.irisan_kunci[0] === 'object' ? data.irisan_kunci[0].slice : data.irisan_kunci[0])
-          : (data.current_slice || 18)
-      );
+      const peakSlice = data.current_slice || (Array.isArray(data.irisan_kunci) && data.irisan_kunci.length > 0
+        ? (typeof data.irisan_kunci[Math.floor(data.irisan_kunci.length / 2)] === 'object' 
+            ? data.irisan_kunci[Math.floor(data.irisan_kunci.length / 2)].slice 
+            : data.irisan_kunci[Math.floor(data.irisan_kunci.length / 2)])
+        : (data.total_slices >= 200 ? 105 : 18));
+      setCurrentSlice(peakSlice);
       setShowHeatmap(data.tier === 'MERAH');
     } catch (err) {
       console.warn(`[CaseDetail] Gagal memuat kasus ${targetUid} via API:`, err.message);
@@ -386,16 +387,17 @@ export default function CaseDetail({
 
       {/* 3. Tata Letak Split-Screen (Kolom Kiri 60% Viewer Citra Aksial, Kolom Kanan 40% Skor AI & Editor) */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 min-h-[660px]">
-        {/* ================= KOLOM KIRI (VIEWER CITRA & KONTROL GRAD-CAM) ================= */}
-        <div className="lg:col-span-7 flex flex-col h-full bg-[#0B1120] rounded-xl border border-slate-800 shadow-2xl overflow-hidden p-2">
-          <DicomCanvasViewer
-            patient={caseData}
-            currentSlice={currentSlice}
-            setCurrentSlice={setCurrentSlice}
-            showHeatmap={showHeatmap}
-            setShowHeatmap={setShowHeatmap}
-            windowMode={windowMode}
-            setWindowMode={setWindowMode}
+        {/* ================= KOLOM KIRI (VIEWER CITRA NIFTI RIIL & KONTROL GRAD-CAM) ================= */}
+        <div className="lg:col-span-7 flex flex-col h-full">
+          <MedicalViewer
+            studyUid={activeUid}
+            initialSlice={currentSlice || caseData?.current_slice || (caseData?.total_slices >= 200 ? 105 : 16)}
+            totalSlices={caseData?.total_slices || 224}
+            keySlices={
+              Array.isArray(caseData?.irisan_kunci) && caseData.irisan_kunci.length > 0
+                ? caseData.irisan_kunci.map(k => typeof k === 'object' ? k.slice : k)
+                : (caseData?.total_slices >= 200 ? [95, 100, 105, 110, 115] : [14, 16, 18, 19, 21])
+            }
           />
         </div>
 

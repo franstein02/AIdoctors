@@ -69,7 +69,15 @@ def get_case_detail_endpoint(study_uid: str, db: Session = Depends(get_db)):
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Kasus pemeriksaan radiologi dengan Study UID '{study_uid}' tidak ditemukan."
         )
-    return study.to_dict()
+    data = study.to_dict()
+    from app.services.nii_renderer import get_nii_metadata
+    meta = get_nii_metadata(study_uid)
+    if meta.get("found"):
+        data["total_slices"] = meta["total_slices"]
+        data["current_slice"] = meta.get("peak_slice", 105 if meta["total_slices"] >= 200 else 18)
+        if study.tier == "MERAH":
+            data["irisan_kunci"] = meta.get("key_slices", [95, 100, 105, 110, 115])
+    return data
 
 @router.post("/cases/{study_uid}/action", response_model=Dict[str, Any])
 def perform_doctor_action_endpoint(
@@ -114,3 +122,35 @@ def perform_doctor_action_endpoint(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Terjadi kesalahan saat memproses keputusan dokter: {str(e)}"
         )
+
+@router.get("/cases/{study_uid}/slice")
+def get_slice_image_endpoint(
+    study_uid: str,
+    index: int = 16,
+    gradcam: bool = False,
+    opacity: float = 0.6
+):
+    """
+    Menghasilkan citra PNG irisan CT scan kepala secara langsung dari volume NIfTI riil (CT.nii).
+    """
+    from fastapi.responses import Response
+    from app.services.nii_renderer import get_nii_path_by_study, render_ct_slice
+
+    nii_path = get_nii_path_by_study(study_uid)
+    if not nii_path:
+        raise HTTPException(status_code=404, detail="Berkas CT.nii kasus ini tidak ditemukan.")
+
+    try:
+        image_bytes = render_ct_slice(nii_path, index, apply_gradcam=gradcam, opacity=opacity)
+        return Response(content=image_bytes, media_type="image/png")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/cases/{study_uid}/metadata")
+def get_case_metadata_endpoint(study_uid: str):
+    """
+    Mengembalikan metadata volume NIfTI kasus (total irisan asli, dsb).
+    """
+    from app.services.nii_renderer import get_nii_metadata
+    return get_nii_metadata(study_uid)
+
