@@ -8,8 +8,10 @@ export default function MedicalViewer({
   keySlices = [14, 16, 18, 19, 21] 
 }) {
   const [currentSlice, setCurrentSlice] = useState(initialSlice);
+  const [debouncedSlice, setDebouncedSlice] = useState(initialSlice);
   const [showGradcam, setShowGradcam] = useState(true);
   const [opacity, setOpacity] = useState(0.65);
+  const [debouncedOpacity, setDebouncedOpacity] = useState(0.65);
   const [isLoading, setIsLoading] = useState(false);
 
   const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000/api/v1';
@@ -18,11 +20,28 @@ export default function MedicalViewer({
   useEffect(() => {
     if (initialSlice !== undefined) {
       setCurrentSlice(initialSlice);
+      setDebouncedSlice(initialSlice);
     }
   }, [initialSlice, studyUid]);
 
-  // URL dinamis menuju endpoint irisan backend
-  const sliceImageUrl = `${API_BASE_URL}/cases/${encodeURIComponent(studyUid)}/slice?index=${currentSlice}&gradcam=${showGradcam}&opacity=${opacity}`;
+  // Debounce 40ms untuk irisan agar slider terasa responsif (60fps) tanpa membanjiri (spam) backend
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedSlice(currentSlice);
+    }, 40);
+    return () => clearTimeout(timer);
+  }, [currentSlice]);
+
+  // Debounce 50ms untuk opasitas heatmap
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedOpacity(opacity);
+    }, 50);
+    return () => clearTimeout(timer);
+  }, [opacity]);
+
+  // URL dinamis menuju endpoint irisan backend ter-debounce
+  const sliceImageUrl = `${API_BASE_URL}/cases/${encodeURIComponent(studyUid)}/slice?index=${debouncedSlice}&gradcam=${showGradcam}&opacity=${debouncedOpacity}`;
 
   // Penanganan scroll mouse untuk berpindah irisan
   const handleWheel = (e) => {
@@ -59,20 +78,17 @@ export default function MedicalViewer({
         className="relative flex-1 flex items-center justify-center my-4 overflow-hidden rounded-lg bg-black min-h-[420px] border border-slate-900 group"
       >
         {isLoading && (
-          <div className="absolute inset-0 flex items-center justify-center bg-black/60 z-10 text-cyan-400 text-sm backdrop-blur-xs font-mono">
-            <div className="flex items-center space-x-2">
-              <span className="w-2.5 h-2.5 rounded-full bg-cyan-400 animate-ping"></span>
-              <span>Memuat irisan citra #{currentSlice}...</span>
-            </div>
+          <div className="absolute top-3 right-3 z-10 bg-slate-900/80 border border-cyan-800/80 px-2.5 py-1 rounded text-[11px] text-cyan-400 flex items-center gap-1.5 backdrop-blur-sm pointer-events-none font-mono">
+            <span className="w-2 h-2 rounded-full bg-cyan-400 animate-ping"></span>
+            <span>Sinkronisasi #{debouncedSlice}...</span>
           </div>
         )}
 
         <img
           src={sliceImageUrl}
           alt={`Irisan CT Scan #${currentSlice}`}
-          className="max-h-[440px] w-auto object-contain select-none transition-opacity duration-150"
+          className="max-h-[440px] w-auto object-contain select-none"
           onLoad={() => setIsLoading(false)}
-          onLoadStart={() => setIsLoading(true)}
           onError={() => setIsLoading(false)}
           draggable={false}
         />

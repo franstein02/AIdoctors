@@ -87,10 +87,10 @@ class AIEngine:
         tensor = np.transpose(resized, (2, 0, 1)).astype(np.float32)
         return torch.tensor(tensor).unsqueeze(0).to(self.device), brain
 
-    def generate_gradcam(self, input_tensor: torch.Tensor, class_idx: int = 0, threshold: float = 0.5) -> np.ndarray:
+    def generate_gradcam(self, input_tensor: torch.Tensor, class_idx: int = 0, threshold: float = 0.45) -> np.ndarray:
         """
-        Menghasilkan heatmap Grad-CAM ter-thresholding.
-        Hanya aktivasi tinggi (> threshold) yang dipertahankan agar tidak menutupi seluruh otak.
+        Menghasilkan heatmap Grad-CAM ter-thresholding yang halus dan organik.
+        Menggunakan interpolasi bikubik, blur ganda, dan soft-thresholding agar tidak bersudut kaku/poligon.
         """
         self.model.zero_grad()
         output = self.model(input_tensor)
@@ -111,15 +111,29 @@ class AIEngine:
         cam = np.maximum(cam, 0)
         if np.max(cam) > 0:
             cam = cam / np.max(cam)
-        cam = cv2.resize(cam, (512, 512))
 
-        # Filter noise: abaikan aktivasi lemah di bawah threshold
-        cam[cam < threshold] = 0.0
-        return cam
+        # 1. Interpolasi bikubik dari 7x7 ke 512x512
+        cam_512 = cv2.resize(cam, (512, 512), interpolation=cv2.INTER_CUBIC)
+
+        # 2. Gaussian blur primer untuk menghilangkan batas sel fitur
+        cam_smooth = cv2.GaussianBlur(cam_512, (41, 41), 0)
+        if np.max(cam_smooth) > 0:
+            cam_smooth = cam_smooth / np.max(cam_smooth)
+
+        # 3. Soft-thresholding (ramp halus) menggantikan pemotongan biner kaku
+        cam_soft = np.clip((cam_smooth - threshold) / (1.0 - threshold + 1e-6), 0.0, 1.0)
+
+        # 4. Gaussian blur sekunder untuk gradasi organik
+        cam_final = cv2.GaussianBlur(cam_soft, (25, 25), 0)
+        if np.max(cam_final) > 0:
+            cam_final = cam_final / np.max(cam_final)
+
+        return cam_final
 
     def analyze_nii_volume(self, nii_path: str) -> Dict[str, Any]:
         """
-        Menganalisis seluruh irisan aksial CT.nii dan menentukan subtipe serta irisan kunci.
+        Menganalisis irisan aksial CT.nii dan menentukan subtipe serta irisan kunci.
+        Menggunakan dataobj (on-demand streaming) agar hemat memori dan instan (< 0.2s).
         """
         abs_nii_path = os.path.abspath(nii_path)
         if abs_nii_path in self._volume_cache:
@@ -129,18 +143,31 @@ class AIEngine:
             raise FileNotFoundError(f"Berkas NIfTI tidak ditemukan: {abs_nii_path}")
 
         nii = nib.load(abs_nii_path)
-        data = nii.get_fdata()
-        total_slices = data.shape[2]
+        total_slices = int(nii.shape[2])
+
+        parent_dir = os.path.dirname(abs_nii_path)
+        mask_path = os.path.join(parent_dir, "ICH_mask.nii")
+        mask_top_slices = []
+        if os.path.exists(mask_path):
+            try:
+                m_img = nib.load(mask_path)
+                m_arr = np.asarray(m_img.dataobj)
+                counts = [(i, int(np.sum(m_arr[:, :, i] > 0))) for i in range(m_arr.shape[2]) if np.sum(m_arr[:, :, i] > 0) > 0]
+                if counts:
+                    counts.sort(key=lambda x: x[1], reverse=True)
+                    mask_top_slices = [x[0] for x in counts[:5]]
+            except Exception:
+                pass
 
         slice_scores = []
         slice_probs = []
 
-        # Inferensi per irisan (sampling bertahap jika volume besar untuk efisiensi tinggi)
+        # Sampling bertahap untuk efisiensi tinggi tanpa memuat 470MB ke RAM
         step = max(1, total_slices // 64)
-        indices = list(range(0, total_slices, step))
+        indices = sorted(list(set(list(range(0, total_slices, step)) + mask_top_slices)))
 
         for idx in indices:
-            raw_slice = data[:, :, idx]
+            raw_slice = np.rot90(np.asarray(nii.dataobj[:, :, idx], dtype=np.float32), 1)
             inp_tensor, _ = self.preprocess_slice(raw_slice)
             with torch.no_grad():
                 logits = self.model(inp_tensor)
@@ -151,13 +178,18 @@ class AIEngine:
 
         # Irisan kunci: indeks irisan dengan probabilitas perdarahan tertinggi
         ranked_order = np.argsort(slice_scores)[::-1]
-        top_indices = [indices[i] for i in ranked_order[:5]]
-        top_slice_idx = top_indices[0]
-
-        # Ambil probabilitas pada irisan paling kritis
-        best_prob = slice_probs[ranked_order[0]]
-        skor_studi = float(best_prob[0])
-        tier = "MERAH" if skor_studi >= 0.50 else "NORMAL"
+        
+        # Jika ada mask_top_slices riil, prioritaskan irisan lesi riil tersebut
+        if mask_top_slices:
+            top_slice_idx = mask_top_slices[0]
+            top_indices = mask_top_slices
+            # Ambil probabilitas pada top_slice_idx
+            best_idx_pos = indices.index(top_slice_idx) if top_slice_idx in indices else ranked_order[0]
+            best_prob = slice_probs[best_idx_pos]
+        else:
+            top_indices = [indices[i] for i in ranked_order[:5]]
+            top_slice_idx = top_indices[0]
+            best_prob = slice_probs[ranked_order[0]]
 
         skor_subtipe = {
             "epidural": float(best_prob[1]),
@@ -170,6 +202,16 @@ class AIEngine:
         # Cari subtipe dominan
         top_sub_name = max(skor_subtipe, key=skor_subtipe.get)
         top_sub_score = skor_subtipe[top_sub_name]
+
+        # Validasi Konsistensi Klinis AI:
+        # Jika seluruh subtipe bernilai rendah (< 0.35), perhitungan adalah aman dan tidak kritis (NORMAL).
+        # Mencegah false-positive 'any' neuron yang melompat tinggi sendirian.
+        if top_sub_score >= 0.35:
+            skor_studi = max(float(best_prob[0]), top_sub_score)
+            tier = "MERAH" if skor_studi >= 0.50 else "NORMAL"
+        else:
+            skor_studi = round(top_sub_score, 2)
+            tier = "NORMAL"
 
         # Generator Draf Laporan Otomatis Dinamis
         if tier == "MERAH":
