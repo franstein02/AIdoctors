@@ -4,6 +4,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from app.core.config import settings
 from app.api import api_router
+from app.core.database import engine, Base
+import app.models.database  # Mendaftarkan model ORM
+
+# Inisialisasi skema tabel database
+Base.metadata.create_all(bind=engine)
 
 app = FastAPI(
     title=settings.APP_NAME,

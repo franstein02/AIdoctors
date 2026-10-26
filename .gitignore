@@ -160,3 +160,9 @@ Desktop.ini
 # Output Statis Grad-CAM Heatmaps
 backend/static/heatmaps/*.png
 !backend/static/heatmaps/.gitkeep
+
+# Database lokal SQLite
+*.db
+*.sqlite
+*.sqlite3
+backend/*.db
