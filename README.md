@@ -1,75 +1,106 @@
-# Dasbor Dokter SIM RS - Modul Radiologi (AIdoctors Middleware)
+# AIdoctors: SIM RS–SATUSEHAT Interoperability & Smart Triaging Middleware
 
-Aplikasi antarmuka web (*Frontend UI*) untuk sistem **SIM RS Radiologi** yang terintegrasi dengan alur **Smart Triaging AIdoctors** dan interoperabilitas **HL7 FHIR SATUSEHAT Kemenkes RI**.
-
-Aplikasi ini berfungsi sebagai ruang kerja dokter spesialis radiologi untuk memantau antrean prioritas gawat darurat, meninjau irisan citra CT kepala bersama indikasi Grad-CAM, serta memvalidasi laporan diagnostik sebelum dikirim ke ekosistem SATUSEHAT secara idempoten.
+Sistem middleware interoperabilitas **SIM RS Radiologi – SATUSEHAT Kemenkes RI (HL7 FHIR R4)** yang dilengkapi fitur pendukung **Smart Triaging perdarahan intrakranial (Intracranial Hemorrhage / ICH)** pada pemeriksaan **CT kepala non-kontras**.
 
 ---
 
-## 🚀 Prasyarat & Cara Menjalankan Aplikasi
+## 🏛️ Aturan Arsitektur Mutlak (Architectural Guardrails)
 
-Aplikasi ini dibangun menggunakan **React.js + Vite** (prototipe antarmuka frontend interaktif tanpa dependensi langsung ke server modalitas fisik).
+1. **Prinsip Human-in-the-Loop:**
+   - AI bertindak semata-mata sebagai asisten triase dan skrining awal.
+   - Status temuan AI (`Observation` dan `DiagnosticReport`) berstatus awal strictly `preliminary`.
+   - **Tidak ada data atau laporan diagnostik yang dikirimkan ke ekosistem SATUSEHAT sebelum dokter spesialis radiologi memvalidasi dan menekan tombol Setujui (ACC)**.
+2. **Prinsip Triase Aman (Non-Demoting Queue):**
+   - AI hanya memiliki wewenang menaikkan prioritas antrean (`tier = MERAH`) jika `skor_studi >= ambang`.
+   - AI **dilarang keras menurunkan prioritas pasien** (`tier = NORMAL` tetap mempertahankan posisi murni berdasarkan waktu kedatangan / FIFO).
+3. **Baku Kontrak Data Mutlak:**
+   - Seluruh modul backend, model Pydantic, antarmuka frontend, dan bundle FHIR wajib mematuhi variabel:
+     - `study_uid`: DICOM Study Instance UID unik
+     - `skor_studi`: Probabilitas keseluruhan perdarahan intrakranial [0.0 - 1.0]
+     - `skor_subtipe`: Probabilitas 5 subtipe perdarahan (`epidural`, `intraparenkim`, `intraventrikel`, `subaraknoid`, `subdural`)
+     - `tier`: Klasifikasi antrean (`MERAH` atau `NORMAL`)
+     - `irisan_kunci`: Irisan aksial dengan lesi dominan/puncak
+     - `heatmap`: Representasi spasial visualisasi Grad-CAM
+     - `draf_laporan`: Draf templat radiologi (`temuan`, `kesan`, `catatan_wajib`)
+     - `versi_model`: Identitas arsitektur ML (misal: `EfficientNet-B0 v1.2`)
+     - `ambang`: Ambang batas triase (default: `0.50`)
+     - `waktu_inferensi`: Durasi komputasi (target SLA: `< 60 Detik`)
 
-> **Prasyarat:** Pastikan komputer Anda telah terpasang **Node.js** (versi 18.x atau lebih baru).
+---
 
-### 1. Masuk ke Direktori Proyek:
-```bash
-cd aidoctors/frontend
+## 📁 Struktur Direktori Monorepo
+
+```plaintext
+aidoctors/
+├── backend/
+│   ├── app/
+│   │   ├── api/          # Router FastAPI: /api/v1/triage & /api/v1/satusehat
+│   │   ├── core/         # Konfigurasi, ambang batas, & in-memory/DB state
+│   │   ├── services/     # Engine AI (EfficientNet-B0 + HU Windowing), Triase Aman, & FHIR R4
+│   │   └── models/       # Skema Pydantic V2 & ORM
+│   ├── weights/          # aidoctors_effnet_epoch_3.pth (.gitignore)
+│   ├── requirements.txt  # Dependensi Python FastAPI & PyTorch
+│   └── main.py           # Entrypoint aplikasi server FastAPI
+├── frontend/
+│   ├── src/
+│   │   ├── components/   # Komponen UI (Header, DicomCanvasViewer, Modal)
+│   │   ├── pages/        # Layar 1 (Triage Queue), Layar 2 (Viewer), Layar 3 (SATUSEHAT Audit)
+│   │   ├── services/     # API Client (apiClient.js)
+│   │   └── data/         # Mock data & FHIR bundle generator
+│   ├── package.json      # Dependensi React + Vite + Tailwind CSS
+│   └── vite.config.js
+├── sample_data/          # Berkas uji citra CT Scan (.dcm / .nii)
+└── README.md
 ```
-*(atau sesuaikan dengan direktori lokal folder frontend Anda)*
 
-### 2. Instal Dependensi (Jika baru pertama kali di-clone/dijalankan):
+---
+
+## 🚀 Panduan Menjalankan Sistem
+
+### 1. Menjalankan Backend (FastAPI)
+
+> **Prasyarat:** Python 3.10+ terpasang.
+
+Masuk ke direktori backend dan instal dependensi:
 ```bash
+cd backend
+pip install -r requirements.txt
+```
+
+Jalankan server backend FastAPI:
+```bash
+python main.py
+```
+* Backend API berjalan di: 👉 **http://localhost:8000**
+* Dokumentasi Interaktif Swagger UI: 👉 **http://localhost:8000/docs**
+
+---
+
+### 2. Menjalankan Frontend (React + Vite)
+
+> **Prasyarat:** Node.js 18+ terpasang.
+
+Buka terminal baru, masuk ke direktori frontend:
+```bash
+cd frontend
 npm install
-```
-
-### 3. Jalankan Server Pengembangan (Vite):
-```bash
 npm run dev
 ```
-
-### 4. Buka di Browser:
-Akses alamat lokal berikut:
-👉 **http://localhost:5173/**
+* Antarmuka Web SIM RS Radiologi berjalan di: 👉 **http://localhost:5173**
 
 ---
 
-## 🖥️ Fitur & 3 Layar Utama
+## 🖥️ 3 Layar Kerja Radiologi
 
-### 1. Layar 1: Antrean Triase (Triage Queue)
-- **Smart Triaging Otomatis:** Pasien dengan indikasi kritis berstatus **[ MERAH ] (Darurat)** otomatis dinaikkan ke baris teratas antrean berdasarkan `skor_studi` tertinggi.
-- **Safety Principle:** AI hanya menaikkan prioritas kasus darurat dan **tidak pernah menurunkan** peringkat pasien normal (kasus normal tetap mempertahankan posisi murni berdasarkan waktu kedatangan/FIFO).
-- **3 Kartu Metrik Ringkas:** Menampilkan akumulasi Kasus Kritis (Merah), Kasus Normal, dan Laporan Terkirim FHIR.
-- **Simulasi Unggah DICOM Baru:** Tombol interaktif untuk menguji alur inferensi CT scan secara instan.
-
-### 2. Layar 2: Detail Kasus & DICOM Viewer (Cornerstone.js Simulator)
-- **Clinical Safety Banner:** Peringatan etik wajib di bagian atas: *"PERINGATAN: Dugaan AI, bukan diagnosis klinis mutlak. Keputusan akhir berada pada dokter spesialis radiologi."*
-- **Tata Letak Split-Screen Responsif:**
-  - **Sisi Kiri (60%):** Viewer citra aksial CT scan kepala berlatar gelap (*dark mode*) dilengkapi kontrol gulir irisan (*slice navigation*) dan pintasan irisan kunci (*key slices*).
-  - **3 Profil Windowing Medis:** Pilihan preset kontras *Brain Window* (C:40, W:80), *Subdural Window* (C:80, W:200), dan *Bone Window* (C:40, W:380).
-  - **Heatmap Grad-CAM Overlay:** Tombol *toggle* sakelar visual untuk melihat area kecurigaan perdarahan dengan slider penyesuaian opasitas.
-  - **Sisi Kanan (40%):** Panel probabilitas AI (skor studi umum + 5 subtipe perdarahan) dan editor draf laporan terstruktur berbasis templat.
-- **3 Tombol Aksi Klinis Dokter:**
-  - **Setujui (ACC) & Kirim ke SATUSEHAT:** Menetapkan laporan menjadi status *final* dan memicu pembentukan bundle FHIR.
-  - **Edit Draf:** Membuka mode sunting teks laporan templat.
-  - **Tolak Draf AI:** Mengosongkan draf AI agar dokter dapat mengetik laporan manual dari awal.
-
-### 3. Layar 3: Interoperabilitas HL7 FHIR SATUSEHAT & Audit Log
-- **Kartu Metrik Kinerja & SLA:** Memantau waktu inferensi real-time (target latensi < 60 detik), versi model arsitektur (EfficientNet-B0), dan respons transmisi (HTTP 200 OK Idempoten).
-- **Tabel Pemetaan 5 Resource HL7 FHIR R4:**
-  1. `Patient & Encounter`: Identitas sintetis pasien dan data kunjungan rawat darurat.
-  2. `ServiceRequest`: Rujukan permintaan pemeriksaan radiologi SIM RS (*basedOn*).
-  3. `ImagingStudy`: Metadata DICOM (UID studi, modalitas CT, jumlah seri & instans).
-  4. `Observation`: Temuan deteksi AI dengan transisi status dari *preliminary* (dugaan AI) menjadi *final* (usai disetujui dokter).
-  5. `DiagnosticReport`: Laporan akhir radiologi berstatus *final* yang merujuk pada seluruh resource pendukung.
-- **Jejak Audit & Penampil Payload:** Linimasa riwayat kronologis stempel waktu (*timestamp*) dan *Dark Code Viewer* JSON Bundle FHIR yang dapat disalin (*copy*) maupun diunduh (*export*).
-
----
-
-## 🛠️ Spesifikasi Teknologi (Tech Stack)
-
-- **Frontend Framework:** React.js
-- **Tooling & Bundler:** Vite
-- **Styling:** Tailwind CSS (Fluid Full-Width Responsive)
-- **Icons:** Lucide React
-- **Standar & Protokol Medis:** DICOM (Cornerstone.js Simulator / Orthanc Mock), HL7 FHIR Release 4
+1. **Layar 1: Antrean Triase (Triage Queue)**
+   - Smart Triaging otomatis memprioritaskan kasus `[ MERAH ]` ke baris paling atas berdasarkan `skor_studi` tertinggi.
+   - Kasus `[ NORMAL ]` tidak pernah didegradasi, menjaga prinsip keadilan antrean FIFO.
+2. **Layar 2: Detail Kasus & DICOM Viewer (Cornerstone.js Simulator)**
+   - Clinical Safety Banner: *"PERINGATAN: Dugaan AI, bukan diagnosis klinis mutlak. Keputusan akhir berada pada dokter spesialis radiologi."*
+   - Navigasi irisan aksial dengan 3 profil Windowing: Brain (C:40, W:80), Subdural (C:80, W:200), Bone (C:40, W:380).
+   - Overlay Grad-CAM dengan slider opasitas visual.
+   - Editor draf laporan radiologi dan tombol otorisasi **Setujui (ACC) & Kirim ke SATUSEHAT**.
+3. **Layar 3: Interoperabilitas HL7 FHIR SATUSEHAT & Jejak Audit**
+   - Transmisi idempoten (HTTP 200 OK) ke gateway SATUSEHAT DTO Kemenkes.
+   - Pemetaan 5 Resource FHIR R4: `Patient`, `Encounter`, `ServiceRequest`, `ImagingStudy`, `Observation`, dan `DiagnosticReport`.
+   - Viewer kode JSON Bundle dengan stempel waktu kronologis audit log.

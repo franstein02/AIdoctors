@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import confetti from 'canvas-confetti';
 import { 
   Activity, 
@@ -10,11 +10,12 @@ import {
   ArrowRight
 } from 'lucide-react';
 import Header from './components/Header';
-import Screen1TriageQueue from './components/Screen1TriageQueue';
-import Screen2DicomViewer from './components/Screen2DicomViewer';
-import Screen3SatuSehatAudit from './components/Screen3SatuSehatAudit';
+import Screen1TriageQueue from './pages/Screen1TriageQueue';
+import Screen2DicomViewer from './pages/Screen2DicomViewer';
+import Screen3SatuSehatAudit from './pages/Screen3SatuSehatAudit';
 import UploadDicomModal from './components/UploadDicomModal';
 import { INITIAL_PATIENTS } from './data/mockData';
+import { getTriageQueue, approveAndSendToSatuSehat } from './services/apiClient';
 
 export default function App() {
   const [patients, setPatients] = useState(INITIAL_PATIENTS);
@@ -22,6 +23,17 @@ export default function App() {
   const [currentScreen, setCurrentScreen] = useState('triage'); // 'triage', 'viewer', 'satusehat'
   const [isUploadModalOpen, setIsUploadModalOpen] = useState(false);
   const [toast, setToast] = useState(null);
+
+  // Sync with FastAPI backend queue if available
+  useEffect(() => {
+    let isMounted = true;
+    getTriageQueue().then(queueData => {
+      if (isMounted && queueData && queueData.length > 0) {
+        setPatients(queueData);
+      }
+    }).catch(e => console.warn('Backend offline, using local state'));
+    return () => { isMounted = false; };
+  }, []);
 
   // Active patient object
   const activePatient = useMemo(() => {
@@ -106,6 +118,13 @@ export default function App() {
       message: `Bundle HL7 FHIR untuk ${activePatient.nama_pasien} (${id}) telah berhasil divalidasi dan terkirim ke SATUSEHAT (HTTP 200 OK).`,
       patientId: id
     });
+
+    // 4. Sinkronisasi Asinkron ke Backend Middleware FastAPI
+    approveAndSendToSatuSehat(activePatient.study_uid || id, { 
+      temuan, 
+      kesan, 
+      catatan_wajib: catatan 
+    }).catch(err => console.warn('[Backend Sync]', err));
   };
 
   // Add newly simulated DICOM study

@@ -17,7 +17,7 @@ import {
   ShieldCheck,
   Check
 } from 'lucide-react';
-import DicomCanvasViewer from './DicomCanvasViewer';
+import DicomCanvasViewer from '../components/DicomCanvasViewer';
 
 export default function Screen2DicomViewer({
   patient,
