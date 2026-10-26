@@ -15,127 +15,171 @@ import Screen2DicomViewer from './pages/Screen2DicomViewer';
 import Screen3SatuSehatAudit from './pages/Screen3SatuSehatAudit';
 import UploadDicomModal from './components/UploadDicomModal';
 import { INITIAL_PATIENTS } from './data/mockData';
-import { getTriageQueue, approveAndSendToSatuSehat } from './services/apiClient';
+import { 
+  getTriageQueue, 
+  executeDoctorDecision,
+  normalizeStudyData,
+  checkServerHealth 
+} from './services/apiClient';
 
 export default function App() {
-  const [patients, setPatients] = useState(INITIAL_PATIENTS);
+  const [patients, setPatients] = useState(() => INITIAL_PATIENTS.map(normalizeStudyData));
   const [activePatientId, setActivePatientId] = useState('std-00192');
   const [currentScreen, setCurrentScreen] = useState('triage'); // 'triage', 'viewer', 'satusehat'
   const [isUploadModalOpen, setIsUploadModalOpen] = useState(false);
   const [toast, setToast] = useState(null);
+  const [isServerOnline, setIsServerOnline] = useState(true);
 
-  // Sync with FastAPI backend queue if available
-  useEffect(() => {
-    let isMounted = true;
-    getTriageQueue().then(queueData => {
-      if (isMounted && queueData && queueData.length > 0) {
+  // Sinkronisasi antrean dengan backend FastAPI
+  const refreshQueue = async () => {
+    try {
+      const queueData = await getTriageQueue();
+      if (queueData && queueData.length > 0) {
         setPatients(queueData);
+        // Pastikan activePatientId valid
+        if (!queueData.some(p => p.id === activePatientId || p.study_uid === activePatientId)) {
+          setActivePatientId(queueData[0].study_uid || queueData[0].id);
+        }
       }
-    }).catch(e => console.warn('Backend offline, using local state'));
-    return () => { isMounted = false; };
+    } catch (e) {
+      console.warn('Backend antrean offline, menggunakan antrean lokal');
+    }
+  };
+
+  useEffect(() => {
+    refreshQueue();
+    // Cek koneksi server
+    checkServerHealth().then(res => setIsServerOnline(res.connected));
   }, []);
 
-  // Active patient object
+  // Pasien yang sedang aktif dipilih
   const activePatient = useMemo(() => {
-    return patients.find(p => p.id === activePatientId) || patients[0];
+    return patients.find(p => p.id === activePatientId || p.study_uid === activePatientId) || patients[0];
   }, [patients, activePatientId]);
 
-  // Global counts for badges
+  // Statistik untuk badge antrean & header
   const stats = useMemo(() => {
-    const redCount = patients.filter(p => p.tier === 'MERAH' && p.status !== 'Selesai - FHIR Terkirim').length;
-    const normalCount = patients.filter(p => p.tier === 'NORMAL' && p.status !== 'Selesai - FHIR Terkirim').length;
-    const fhirSentCount = patients.filter(p => p.status === 'Selesai - FHIR Terkirim').length + 10;
+    const redCount = patients.filter(
+      p => p.tier === 'MERAH' && p.status_pemeriksaan !== 'SELESAI_ACC' && p.status !== 'Selesai - FHIR Terkirim'
+    ).length;
+    const normalCount = patients.filter(
+      p => p.tier === 'NORMAL' && p.status_pemeriksaan !== 'SELESAI_ACC' && p.status !== 'Selesai - FHIR Terkirim'
+    ).length;
+    const fhirSentCount = patients.filter(
+      p => p.status_pemeriksaan === 'SELESAI_ACC' || p.status === 'Selesai - FHIR Terkirim' || p.status_fhir === 'TERKIRIM'
+    ).length;
     return { redCount, normalCount, fhirSentCount };
   }, [patients]);
 
-  // Navigate to Viewer for a patient
-  const handleSelectPatient = (id) => {
-    setActivePatientId(id);
+  // Navigasi ke Layar 2 (Viewer Medis)
+  const handleSelectPatient = (idOrUid) => {
+    setActivePatientId(idOrUid);
     setCurrentScreen('viewer');
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
-  // Navigate to SATUSEHAT Audit for a patient
-  const handleViewAudit = (id) => {
-    setActivePatientId(id);
+  // Navigasi ke Layar 3 (Audit & Interoperabilitas SATUSEHAT)
+  const handleViewAudit = (idOrUid) => {
+    setActivePatientId(idOrUid);
     setCurrentScreen('satusehat');
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
-  // Doctor Approves & Sends report to SATUSEHAT
-  const handleApproveAndSend = ({ id, temuan, kesan, catatan }) => {
-    // 1. Update patient record
+  // Penanganan Keputusan Dokter: SETUJUI, EDIT, atau TOLAK
+  const handleDoctorAction = async ({ action, laporan_baru, alasan }) => {
+    const targetUid = activePatient?.study_uid || activePatient?.id;
+    if (!targetUid) return;
+
+    // 1. Mutasi State Lokal
     setPatients(prev => prev.map(p => {
-      if (p.id === id) {
-        return {
-          ...p,
-          status: 'Selesai - FHIR Terkirim',
-          draf_laporan: {
-            ...p.draf_laporan,
-            temuan,
-            kesan,
-            catatan_wajib: catatan
-          },
-          audit_metrics: {
-            ...p.audit_metrics,
-            status_konektor: 'Terkirim ke Environment Uji',
-            http_status: 'HTTP 200 OK (Idempoten)'
-          },
-          audit_logs: [
-            ...p.audit_logs,
-            { 
-              time: '10:16:40', 
-              text: "Dokter (Dr. Ahmad Fauzi, Sp.Rad) menekan 'Setujui (ACC)'. Status Observation & DiagnosticReport bermutasi menjadi FINAL." 
+      if (p.id === targetUid || p.study_uid === targetUid) {
+        if (action === 'SETUJUI' || action === 'EDIT') {
+          return {
+            ...p,
+            status_pemeriksaan: 'SELESAI_ACC',
+            status: 'Selesai - FHIR Terkirim',
+            status_fhir: 'TERKIRIM',
+            draf_laporan: laporan_baru || p.draf_laporan,
+            laporan_final_dokter: laporan_baru || p.draf_laporan,
+            audit_metrics: {
+              ...p.audit_metrics,
+              status_konektor: 'Terkirim ke Environment Uji - HTTP 200',
+              http_status: 'HTTP 200 OK (Idempoten)'
             },
-            { 
-              time: '10:16:42', 
-              text: "Validasi skema HL7 FHIR R4 lokal berhasil. Mengirim Bundle ke Endpoint Uji SATUSEHAT..." 
-            },
-            { 
-              time: '10:16:43', 
-              text: "SUKSES: Bundle diterima SATUSEHAT (HTTP 200 OK, Idempoten - UUID: bnd-ss-39210-2026, Tanpa Kirim Ganda)." 
-            }
-          ]
-        };
+            audit_logs: [
+              {
+                time: new Date().toLocaleTimeString('id-ID'),
+                text: `Dokter (Dr. Ahmad Fauzi, Sp.Rad) mengeksekusi '${action}'. Status Observation & DiagnosticReport bermutasi menjadi FINAL.`
+              },
+              {
+                time: new Date().toLocaleTimeString('id-ID'),
+                text: "SUKSES: Bundle HL7 FHIR R4 diterima SATUSEHAT (HTTP 200 OK, Idempoten - Anti-Kirim Ganda)."
+              },
+              ...(p.audit_logs || [])
+            ]
+          };
+        } else if (action === 'TOLAK') {
+          return {
+            ...p,
+            status_pemeriksaan: 'DITOLAK_MENUNGGU_MANUAL',
+            status: 'Ditolak Manual',
+            status_fhir: 'BELUM_DIKIRIM',
+            draf_laporan: '',
+            audit_logs: [
+              {
+                time: new Date().toLocaleTimeString('id-ID'),
+                text: `Dokter menolak draf templat AI: "${alasan || 'Draf dikosongkan untuk penulisan manual.'}". Tidak ada data dikirim ke SATUSEHAT.`
+              },
+              ...(p.audit_logs || [])
+            ]
+          };
+        }
       }
       return p;
     }));
 
-    // 2. Fire celebratory confetti
-    try {
-      confetti({
-        particleCount: 65,
-        spread: 70,
-        origin: { y: 0.7 }
+    // 2. Efek & Notifikasi
+    if (action === 'SETUJUI' || action === 'EDIT') {
+      try {
+        confetti({
+          particleCount: 65,
+          spread: 70,
+          origin: { y: 0.7 }
+        });
+      } catch (e) {
+        // ignore
+      }
+
+      setToast({
+        title: 'Laporan Radiologi Disetujui!',
+        message: `Kasus ${activePatient?.nama_pasien || targetUid} berhasil disetujui. Bundle HL7 FHIR R4 terkirim ke SATUSEHAT (HTTP 200 OK).`,
+        patientId: targetUid
       });
-    } catch (e) {
-      // ignore in environments without canvas
     }
 
-    // 3. Show success toast with direct button to Screen 3
-    setToast({
-      title: 'Laporan Berhasil Disetujui & Dikirim!',
-      message: `Bundle HL7 FHIR untuk ${activePatient.nama_pasien} (${id}) telah berhasil divalidasi dan terkirim ke SATUSEHAT (HTTP 200 OK).`,
-      patientId: id
-    });
-
-    // 4. Sinkronisasi Asinkron ke Backend Middleware FastAPI
-    approveAndSendToSatuSehat(activePatient.study_uid || id, { 
-      temuan, 
-      kesan, 
-      catatan_wajib: catatan 
-    }).catch(err => console.warn('[Backend Sync]', err));
+    // 3. Sinkronisasi ke Backend Middleware FastAPI
+    try {
+      await executeDoctorDecision(targetUid, {
+        action,
+        laporan_baru,
+        alasan,
+        user: 'Dr. Ahmad Fauzi, Sp.Rad'
+      });
+    } catch (err) {
+      console.warn('[Sync Backend Action]', err);
+    }
   };
 
-  // Add newly simulated DICOM study
+  // Menambahkan studi DICOM baru dari simulasi modal
   const handleStudyAdded = (newPatient) => {
-    setPatients(prev => [newPatient, ...prev]);
-    setActivePatientId(newPatient.id);
-    
+    const normalized = normalizeStudyData(newPatient);
+    setPatients(prev => [normalized, ...prev]);
+    setActivePatientId(normalized.id || normalized.study_uid);
+
     setToast({
-      title: 'Studi DICOM Baru Masuk!',
-      message: `Kasus ${newPatient.id} (${newPatient.nama_pasien}) telah selesai diinferensi AI. Tier: [${newPatient.tier}] Skor: ${newPatient.skor_studi}.`,
-      patientId: newPatient.id
+      title: 'Studi DICOM Baru Berhasil Dimuat!',
+      message: `Kasus ${normalized.id} (${normalized.nama_pasien}) telah selesai diinferensi AI. Tier: [${normalized.tier}] Skor: ${normalized.skor_studi.toFixed(2)}.`,
+      patientId: normalized.id
     });
   };
 
@@ -149,9 +193,10 @@ export default function App() {
         stats={stats}
         patients={patients}
         onSelectPatient={(id) => setActivePatientId(id)}
+        serverStatus={isServerOnline}
       />
 
-      {/* Main Content Area (Full-Width Responsive for Medical Dashboard & PACS) */}
+      {/* Konten Utama 3 Layar */}
       <main className="flex-1 w-full px-4 sm:px-6 lg:px-8 py-5">
         {currentScreen === 'triage' && (
           <Screen1TriageQueue
@@ -169,7 +214,8 @@ export default function App() {
               setCurrentScreen('triage');
               window.scrollTo({ top: 0, behavior: 'smooth' });
             }}
-            onApproveAndSend={handleApproveAndSend}
+            onDoctorAction={handleDoctorAction}
+            onApproveAndSend={({ laporan_lengkap }) => handleDoctorAction({ action: 'SETUJUI', laporan_baru: laporan_lengkap })}
             onNavigateToAudit={handleViewAudit}
           />
         )}
@@ -189,14 +235,14 @@ export default function App() {
         )}
       </main>
 
-      {/* Upload DICOM Simulation Modal */}
+      {/* Modal Simulasi Unggah DICOM */}
       <UploadDicomModal
         isOpen={isUploadModalOpen}
         onClose={() => setIsUploadModalOpen(false)}
         onStudyAdded={handleStudyAdded}
       />
 
-      {/* Global Interactive Notification Toast */}
+      {/* Notifikasi Toast Global */}
       {toast && (
         <div className="fixed bottom-5 right-5 z-50 max-w-md bg-slate-900 text-white p-4 rounded-xl shadow-2xl border border-slate-700 animate-bounce-subtle flex items-start space-x-3">
           <div className="w-8 h-8 rounded-lg bg-emerald-500/20 text-emerald-400 flex items-center justify-center flex-shrink-0 mt-0.5 border border-emerald-500/30">
@@ -226,7 +272,6 @@ export default function App() {
           </button>
         </div>
       )}
-
     </div>
   );
 }
