@@ -35,6 +35,10 @@ class DoctorActionRequest(BaseModel):
         None,
         description="Catatan klinis dokter radiologi (alternatif laporan_baru)"
     )
+    report_text: Optional[str] = Field(
+        None,
+        description="Teks laporan draf/final dari dokter (alias laporan_baru)"
+    )
 
 @router.get("/queue", response_model=List[Dict[str, Any]])
 def get_triage_queue_endpoint(db: Session = Depends(get_db)):
@@ -91,8 +95,8 @@ def perform_doctor_action_endpoint(
             db=db,
             study_uid=study_uid,
             action=payload.action,
-            laporan_baru=payload.laporan_baru or payload.doctor_notes,
-            alasan=payload.alasan,
+            laporan_baru=payload.report_text or payload.laporan_baru or payload.doctor_notes,
+            alasan=payload.alasan or payload.doctor_notes,
             user=payload.user or "Dr. Ahmad Fauzi, Sp.Rad"
         )
         return {

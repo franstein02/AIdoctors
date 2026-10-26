@@ -62,15 +62,18 @@ aidoctors/
 > **Prasyarat:** Python 3.10+ terpasang.
 
 Masuk ke direktori backend dan instal dependensi:
+
 ```bash
 cd backend
 pip install -r requirements.txt
 ```
 
 Jalankan server backend FastAPI:
+
 ```bash
 python main.py
 ```
+
 * Backend API berjalan di: 👉 **http://localhost:8000**
 * Dokumentasi Interaktif Swagger UI: 👉 **http://localhost:8000/docs**
 
@@ -81,11 +84,13 @@ python main.py
 > **Prasyarat:** Node.js 18+ terpasang.
 
 Buka terminal baru, masuk ke direktori frontend:
+
 ```bash
 cd frontend
 npm install
 npm run dev
 ```
+
 * Antarmuka Web SIM RS Radiologi berjalan di: 👉 **http://localhost:5173**
 
 ---

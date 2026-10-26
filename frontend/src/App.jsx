@@ -10,11 +10,12 @@ import {
   ArrowRight
 } from 'lucide-react';
 import Header from './components/Header';
-import Screen1TriageQueue from './pages/Screen1TriageQueue';
-import Screen2DicomViewer from './pages/Screen2DicomViewer';
-import Screen3SatuSehatAudit from './pages/Screen3SatuSehatAudit';
+import TriageQueue from './pages/TriageQueue';
+import CaseDetail from './pages/CaseDetail';
+import SatusehatLog from './pages/SatusehatLog';
 import UploadDicomModal from './components/UploadDicomModal';
 import { INITIAL_PATIENTS } from './data/mockData';
+import { apiService } from './services/api';
 import { 
   getTriageQueue, 
   executeDoctorDecision,
@@ -33,16 +34,26 @@ export default function App() {
   // Sinkronisasi antrean dengan backend FastAPI
   const refreshQueue = async () => {
     try {
-      const queueData = await getTriageQueue();
-      if (queueData && queueData.length > 0) {
+      const queueData = await apiService.getQueue();
+      if (Array.isArray(queueData) && queueData.length > 0) {
         setPatients(queueData);
         // Pastikan activePatientId valid
         if (!queueData.some(p => p.id === activePatientId || p.study_uid === activePatientId)) {
           setActivePatientId(queueData[0].study_uid || queueData[0].id);
         }
+        return;
       }
     } catch (e) {
-      console.warn('Backend antrean offline, menggunakan antrean lokal');
+      console.warn('Backend antrean offline via apiService, fallback ke cache:', e.message);
+    }
+
+    try {
+      const fallbackQueue = await getTriageQueue();
+      if (fallbackQueue && fallbackQueue.length > 0) {
+        setPatients(fallbackQueue);
+      }
+    } catch (e) {
+      // Keep existing patients
     }
   };
 
@@ -199,8 +210,7 @@ export default function App() {
       {/* Konten Utama 3 Layar */}
       <main className="flex-1 w-full px-4 sm:px-6 lg:px-8 py-5">
         {currentScreen === 'triage' && (
-          <Screen1TriageQueue
-            patients={patients}
+          <TriageQueue
             onSelectPatient={handleSelectPatient}
             onOpenUploadModal={() => setIsUploadModalOpen(true)}
             onViewAudit={handleViewAudit}
@@ -208,23 +218,26 @@ export default function App() {
         )}
 
         {currentScreen === 'viewer' && (
-          <Screen2DicomViewer
+          <CaseDetail
+            studyUid={activePatientId}
             patient={activePatient}
             onBackToQueue={() => {
               setCurrentScreen('triage');
+              refreshQueue();
               window.scrollTo({ top: 0, behavior: 'smooth' });
             }}
             onDoctorAction={handleDoctorAction}
-            onApproveAndSend={({ laporan_lengkap }) => handleDoctorAction({ action: 'SETUJUI', laporan_baru: laporan_lengkap })}
             onNavigateToAudit={handleViewAudit}
           />
         )}
 
         {currentScreen === 'satusehat' && (
-          <Screen3SatuSehatAudit
+          <SatusehatLog
+            studyUid={activePatientId}
             patient={activePatient}
             onBackToQueue={() => {
               setCurrentScreen('triage');
+              refreshQueue();
               window.scrollTo({ top: 0, behavior: 'smooth' });
             }}
             onBackToViewer={() => {
