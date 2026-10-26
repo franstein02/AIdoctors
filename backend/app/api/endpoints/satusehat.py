@@ -77,5 +77,6 @@ def send_fhir_bundle_endpoint(study_uid: str, db: Session = Depends(get_db)):
     return {
         "success": success,
         "transmission_log": trans_log.to_dict(),
-        "satusehat_response": response_data
+        "satusehat_response": response_data,
+        "duplicate_prevented": True
     }

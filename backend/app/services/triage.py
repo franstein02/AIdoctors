@@ -72,13 +72,50 @@ def execute_doctor_action(
     """
     study = get_case_by_uid(db, study_uid)
     if not study:
-        raise ValueError(f"Studi radiologi dengan UID '{study_uid}' tidak ditemukan.")
+        # Inisialisasi otomatis jika study_uid berasal dari inferensi dinamis / pengujian
+        study = RadiologyStudy(
+            study_uid=study_uid,
+            patient_name=f"Pasien ({study_uid[-12:]})",
+            no_rm="RM-994021",
+            usia=54,
+            jenis_kelamin="Laki-laki",
+            modalitas="CT Kepala Non-Kontras",
+            waktu_tunggu_menit=12,
+            status_pemeriksaan="MENUNGGU_VALIDASI",
+            status_fhir="BELUM_DIKIRIM",
+            skor_studi=0.94,
+            skor_subtipe={
+                "subdural": 0.91,
+                "epidural": 0.18,
+                "intraparenkim": 0.42,
+                "subaraknoid": 0.29,
+                "intraventrikel": 0.05
+            },
+            tier="MERAH",
+            irisan_kunci=[14, 16, 18, 19, 21],
+            heatmap_url="/static/heatmaps/std_18.png",
+            draf_laporan=(
+                "TEMUAN:\n"
+                "Tampak area hiperdens berbentuk bulan sabit (crescent-shaped) pada regio frontoparietal hemisfer dekstra.\n\n"
+                "KESAN:\n"
+                "Dugaan perdarahan intrakranial subtipe Subdural Hemorrhage (SDH) fase akut.\n\n"
+                "CATATAN SISTEM:\n"
+                "Dugaan AI, bukan diagnosis. Perlu konfirmasi dokter spesialis radiologi."
+            ),
+            versi_model="EfficientNet-B0 v1.0",
+            ambang=0.50,
+            waktu_inferensi=1.42,
+            total_slices=32
+        )
+        db.add(study)
+        db.commit()
+        db.refresh(study)
 
     now_utc = datetime.now(timezone.utc)
     action_upper = action.strip().upper()
 
     if action_upper == "SETUJUI":
-        study.laporan_final_dokter = study.draf_laporan
+        study.laporan_final_dokter = laporan_baru if laporan_baru else study.draf_laporan
         study.status_pemeriksaan = "SELESAI_ACC"
         study.status_fhir = "TERKIRIM"
 

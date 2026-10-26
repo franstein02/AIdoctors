@@ -79,9 +79,16 @@ events.out.tfevents.*
 /kaggle_data/
 /medical_records/
 
-# Pengecualian agar UI mock data di src/data tetap terlacak
+# Sample data pasien mentah (Ukuran besar >100MB & privasi medis)
+sample_data/*/
+!sample_data/README.md
+!sample_data/**/.gitkeep
+
+# Pengecualian agar UI mock data di src/data dan frontend tetap terlacak
 !src/data/
 !src/data/**
+!frontend/src/data/
+!frontend/src/data/**
 
 # Arsip data besar
 *.zip
@@ -161,8 +168,32 @@ Desktop.ini
 backend/static/heatmaps/*.png
 !backend/static/heatmaps/.gitkeep
 
-# Database lokal SQLite
+# Database lokal SQLite & berkas lock/jurnal (WAL / SHM)
 *.db
 *.sqlite
 *.sqlite3
 backend/*.db
+*.db-wal
+*.db-shm
+*.db-journal
+backend/*.db-wal
+backend/*.db-shm
+backend/*.db-journal
+
+# ------------------------------------------------------------------------------
+# 8. CACHE PENGUJIAN & LAPORAN DINAMIS
+# ------------------------------------------------------------------------------
+.pytest_cache/
+.coverage
+htmlcov/
+.vite/
+frontend/.vite/
+
+# Berkas sementara konversi citra medis
+backend/static/heatmaps/temp_*
+*.tmp
+*.temp
+
+# Laporan dinamis pengujian otomatis
+Laporan_Pengujian_*.md
+Laporan_Pengujian_AIdoctors.md
