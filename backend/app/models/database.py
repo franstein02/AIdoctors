@@ -62,9 +62,16 @@ class RadiologyStudy(Base):
 
     def to_dict(self):
         """Konversi model SQLAlchemy ke format dictionary / JSON kontrak data"""
+        dominant_sub = "Normal"
+        if self.skor_subtipe and isinstance(self.skor_subtipe, dict):
+            top_sub = max(self.skor_subtipe, key=self.skor_subtipe.get)
+            if self.skor_subtipe[top_sub] >= 0.35 or self.tier == "MERAH":
+                dominant_sub = top_sub.capitalize()
+
         return {
             "study_uid": self.study_uid,
             "patient_name": self.patient_name,
+            "nama_pasien": self.patient_name,
             "no_rm": self.no_rm,
             "usia": self.usia,
             "jenis_kelamin": self.jenis_kelamin,
@@ -76,6 +83,7 @@ class RadiologyStudy(Base):
             "status_fhir": self.status_fhir,
             "skor_studi": self.skor_studi,
             "skor_subtipe": self.skor_subtipe,
+            "subtipe_dominan": dominant_sub,
             "tier": self.tier,
             "irisan_kunci": self.irisan_kunci,
             "heatmap_url": self.heatmap_url,

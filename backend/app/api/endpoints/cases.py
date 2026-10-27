@@ -54,45 +54,68 @@ def get_case_detail(study_uid: str, db: Session = Depends(get_db)):
     seed_initial_studies_if_empty(db)
     study = get_case_by_uid(db, study_uid)
 
-    meta = get_nii_metadata(study_uid) if study_uid else {"found": False}
-    total_slices = meta.get("total_slices", 224) if meta.get("found") else 224
-    current_slice = meta.get("peak_slice", 104) if meta.get("found") else 104
-    irisan_kunci = meta.get("key_slices", [101, 102, 103, 104, 105]) if meta.get("found") else [101, 102, 103, 104, 105]
-
-    # Jika studi terdaftar di antrean SIM RS, pastikan skor dan tier identik dengan Layar 1
-    if study:
-        data = study.to_dict()
-        data["total_slices"] = total_slices
-        data["current_slice"] = current_slice
-        data["top_slice_idx"] = current_slice
-        if study.tier == "MERAH" and meta.get("found"):
-            data["irisan_kunci"] = irisan_kunci
-        data["heatmap_url"] = f"/api/v1/cases/{study_uid}/slices/{current_slice}?gradcam=true"
-        return JSONResponse(data)
-
-    # Fallback dinamis jika studi belum terdaftar di database
     nii_path = resolve_nii_file(study_uid)
-    if not os.path.exists(nii_path):
-        raise HTTPException(status_code=404, detail="Berkas CT.nii tidak ditemukan")
+    has_real_nii = bool(nii_path and os.path.exists(nii_path))
 
-    analysis = ai_engine_service.analyze_nii_volume(nii_path)
+    if has_real_nii:
+        # Inferensi AI Real-time langsung dari volume NIfTI
+        analysis = ai_engine_service.analyze_nii_volume(nii_path)
 
-    return JSONResponse({
-        "study_uid": study_uid,
-        "patient_name": f"Pasien ({study_uid[-12:]})",
-        "skor_studi": analysis["skor_studi"],
-        "skor_subtipe": analysis["skor_subtipe"],
-        "tier": analysis["tier"],
-        "irisan_kunci": analysis["irisan_kunci"],
-        "total_slices": analysis["total_slices"],
-        "top_slice_idx": analysis["top_slice_idx"],
-        "current_slice": analysis["top_slice_idx"],
-        "heatmap_url": f"/api/v1/cases/{study_uid}/slices/{analysis['top_slice_idx']}?gradcam=true",
-        "draf_laporan": analysis["draf_laporan"],
-        "versi_model": "EfficientNet-B0 v1.0",
-        "ambang": 0.50,
-        "waktu_inferensi": 1.42
-    })
+        if study:
+            # Skor AI selalu mencerminkan hasil analisis citra NIfTI riil terkini
+            study.skor_studi = analysis["skor_studi"]
+            study.skor_subtipe = analysis["skor_subtipe"]
+            study.tier = analysis["tier"]
+            study.irisan_kunci = analysis["irisan_kunci"]
+            study.total_slices = analysis["total_slices"]
+            study.heatmap_url = f"/api/v1/cases/{study_uid}/slices/{analysis['top_slice_idx']}?gradcam=true"
+
+            # Jika draf lama masih membawa template lama atau status masih menunggu validasi
+            if study.status_pemeriksaan == "MENUNGGU_VALIDASI" or not study.laporan_final_dokter or "bulan sabit" in (study.laporan_final_dokter or ""):
+                study.draf_laporan = analysis["draf_laporan"]
+                if study.laporan_final_dokter and "bulan sabit" in study.laporan_final_dokter:
+                    study.laporan_final_dokter = analysis["draf_laporan"]
+            db.commit()
+
+            data = study.to_dict()
+            data["total_slices"] = analysis["total_slices"]
+            data["current_slice"] = analysis["top_slice_idx"]
+            data["top_slice_idx"] = analysis["top_slice_idx"]
+            data["irisan_kunci"] = analysis["irisan_kunci"]
+            data["heatmap_url"] = f"/api/v1/cases/{study_uid}/slices/{analysis['top_slice_idx']}?gradcam=true"
+            data["skor_studi"] = analysis["skor_studi"]
+            data["skor_subtipe"] = analysis["skor_subtipe"]
+            data["tier"] = analysis["tier"]
+
+            # Jika dokter belum secara eksplisit menulis laporan kustom, sajikan draf laporan AI real-time
+            if not study.laporan_final_dokter or "bulan sabit" in (study.laporan_final_dokter or ""):
+                data["draf_laporan"] = analysis["draf_laporan"]
+
+            return JSONResponse(data)
+
+        # Jika studi belum tercatat di DB tetapi berkas NIfTI riil ada
+        return JSONResponse({
+            "study_uid": study_uid,
+            "patient_name": f"Pasien ({study_uid[-12:]})",
+            "skor_studi": analysis["skor_studi"],
+            "skor_subtipe": analysis["skor_subtipe"],
+            "tier": analysis["tier"],
+            "irisan_kunci": analysis["irisan_kunci"],
+            "total_slices": analysis["total_slices"],
+            "top_slice_idx": analysis["top_slice_idx"],
+            "current_slice": analysis["top_slice_idx"],
+            "heatmap_url": f"/api/v1/cases/{study_uid}/slices/{analysis['top_slice_idx']}?gradcam=true",
+            "draf_laporan": analysis["draf_laporan"],
+            "versi_model": "EfficientNet-B0 v1.0",
+            "ambang": 0.50,
+            "waktu_inferensi": 1.42
+        })
+
+    # Jika berkas NIfTI fisik tidak ditemukan, gunakan data terdaftar pada basis data
+    if study:
+        return JSONResponse(study.to_dict())
+
+    raise HTTPException(status_code=404, detail=f"Kasus radiologi '{study_uid}' atau berkas CT.nii tidak ditemukan")
 
 # In-memory cache untuk objek NIfTI dan array Grad-CAM agar respons instan (< 5ms)
 _nii_cache = {}

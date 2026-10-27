@@ -70,13 +70,33 @@ def get_case_detail_endpoint(study_uid: str, db: Session = Depends(get_db)):
             detail=f"Kasus pemeriksaan radiologi dengan Study UID '{study_uid}' tidak ditemukan."
         )
     data = study.to_dict()
-    from app.services.nii_renderer import get_nii_metadata
-    meta = get_nii_metadata(study_uid)
-    if meta.get("found"):
-        data["total_slices"] = meta["total_slices"]
-        data["current_slice"] = meta.get("peak_slice", 105 if meta["total_slices"] >= 200 else 18)
-        if study.tier == "MERAH":
-            data["irisan_kunci"] = meta.get("key_slices", [95, 100, 105, 110, 115])
+    from app.services.nii_renderer import get_nii_path_by_study
+    from app.services.ai_engine import ai_engine_service
+    import os
+
+    nii_path = get_nii_path_by_study(study_uid)
+    if nii_path and os.path.exists(nii_path):
+        analysis = ai_engine_service.analyze_nii_volume(nii_path)
+        if study.status_pemeriksaan == "MENUNGGU_VALIDASI":
+            study.skor_studi = analysis["skor_studi"]
+            study.skor_subtipe = analysis["skor_subtipe"]
+            study.tier = analysis["tier"]
+            study.irisan_kunci = analysis["irisan_kunci"]
+            study.draf_laporan = analysis["draf_laporan"]
+            study.total_slices = analysis["total_slices"]
+            study.heatmap_url = f"/api/v1/cases/{study_uid}/slices/{analysis['top_slice_idx']}?gradcam=true"
+            db.commit()
+            data = study.to_dict()
+            data["draf_laporan"] = analysis["draf_laporan"]
+            data["skor_subtipe"] = analysis["skor_subtipe"]
+            data["skor_studi"] = analysis["skor_studi"]
+            data["tier"] = analysis["tier"]
+
+        data["total_slices"] = analysis["total_slices"]
+        data["current_slice"] = analysis["top_slice_idx"]
+        data["top_slice_idx"] = analysis["top_slice_idx"]
+        data["irisan_kunci"] = analysis["irisan_kunci"]
+        data["heatmap_url"] = f"/api/v1/cases/{study_uid}/slices/{analysis['top_slice_idx']}?gradcam=true"
     return data
 
 @router.post("/cases/{study_uid}/action", response_model=Dict[str, Any])

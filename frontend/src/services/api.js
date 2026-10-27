@@ -9,6 +9,16 @@ export const apiService = {
     return await res.json();
   },
 
+  // Layar 1: Unggah berkas NIfTI / DICOM asli untuk inferensi real-time
+  async uploadCtScan(formData) {
+    const res = await fetch(`${API_BASE_URL}/inference/analyze`, {
+      method: 'POST',
+      body: formData
+    });
+    if (!res.ok) throw new Error(`Gagal memproses inferensi AI: HTTP ${res.status}`);
+    return await res.json();
+  },
+
   // Layar 2: Ambil rincian studi dan hasil AI satu kasus
   async getCaseDetail(studyUid) {
     const res = await fetch(`${API_BASE_URL}/cases/${encodeURIComponent(studyUid)}`);

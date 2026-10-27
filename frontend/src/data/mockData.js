@@ -14,30 +14,30 @@ export const INITIAL_PATIENTS = [
     tier_label: "Darurat",
     skor_studi: 0.94,
     tingkat_keparahan: "Sangat Tinggi",
-    subtipe_dominan: "Subdural",
+    subtipe_dominan: "Intraparenkim",
     skor_subtipe: {
-      subdural: 0.91,
-      epidural: 0.18,
-      intraparenkim: 0.42,
-      subaraknoid: 0.29,
-      intraventrikel: 0.05
+      intraparenkim: 0.84,
+      subdural: 0.0,
+      epidural: 0.0,
+      subaraknoid: 0.02,
+      intraventrikel: 0.22
     },
     waktu_tunggu: "12 Menit",
     waktu_tunggu_menit: 12,
     status: "Belum Dibaca", // "Belum Dibaca", "Sedang Diperiksa", "Selesai - FHIR Terkirim"
-    total_slices: 32,
-    current_slice: 18,
+    total_slices: 224,
+    current_slice: 103,
     irisan_kunci: [
-      { slice: 14, score: 0.82, note: "Penebalan ekstra-aksial fokal" },
-      { slice: 16, score: 0.89, note: "Hiperdensitas kresentik awal" },
-      { slice: 18, score: 0.94, isPeak: true, note: "Ketebalan puncak ~14mm" },
-      { slice: 19, score: 0.88, note: "Kompresi sulkus parietalis" },
-      { slice: 21, score: 0.65, note: "Perluasan parietal superior" }
+      { slice: 101, score: 0.78, note: "Margin edema perifokal" },
+      { slice: 102, score: 0.81, note: "Lesi hiperdens meluas" },
+      { slice: 103, score: 0.84, isPeak: true, note: "Puncak densitas hematoma talamus" },
+      { slice: 104, score: 0.82, note: "Pendorongan substansia alba" },
+      { slice: 105, score: 0.76, note: "Batas superior hematoma" }
     ],
-    lesion_type: "subdural",
+    lesion_type: "intraparenchymal",
     draf_laporan: {
-      temuan: "Tampak area hiperdens berbentuk bulan sabit (crescent-shaped) pada regio frontoparietal hemisfer dekstra (lihat irisan kunci #16, #18, #19) berukuran ketebalan maksimal ~14 mm yang mengindikasikan akumulasi hematoma ekstra-aksial. Sulkus kortikalis lokal tampak mendatar disertai penekanan ringan pada ventrikel lateral dekstra (midline shift < 2 mm). Diferensiasi substansia grisea-alba intraparenkim relatif terpelihara. Tidak tampak garis fraktur pada tulang kalvaria.",
-      kesan: "Mengarah pada dugaan perdarahan intrakranial subtipe Subdural Hemorrhage (SDH) fase akut pada regio hemisfer dekstra. Efek desak massa minimal.",
+      temuan: "Tampak lesi hiperdens abnormal mengarah pada akumulasi hematoma subtipe INTRAPARENKIM (skor probabilitas: 0.84) yang teridentifikasi jelas pada irisan kunci #101, #102, #103, #104, #105 di regio ganglia basalis / talamus hemisfer kiri. Sulkus kortikalis lokal mendatar. Tidak tampak fraktur impresi kalvaria.",
+      kesan: "Dugaan perdarahan intrakranial subtipe Intraparenkim (ICH) akut pada ganglia basalis / talamus (Skor Studi AI: 0.94). Prioritas Triase: MERAH (Gawat Darurat).",
       catatan_wajib: "Perlu konfirmasi dan validasi dokter spesialis radiologi."
     },
     fhir_ids: {

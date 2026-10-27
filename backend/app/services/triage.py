@@ -178,6 +178,37 @@ def seed_initial_studies_if_empty(db: Session):
     """
     Mengisi data awal pemeriksaan radiologi jika tabel masih kosong.
     """
+    # Migrasi data awal jika record Tn. Budi Santoso di database masih membawa nilai statis mock lama
+    existing_budi = db.query(RadiologyStudy).filter(RadiologyStudy.study_uid == "1.2.840.113619.2.55.3.281920192").first()
+    if existing_budi:
+        sub = existing_budi.skor_subtipe or {}
+        if isinstance(sub, dict) and sub.get("subdural", 0) > 0.5:
+            existing_budi.skor_subtipe = {
+                "subdural": 0.0,
+                "epidural": 0.0,
+                "intraparenkim": 0.84,
+                "subaraknoid": 0.02,
+                "intraventrikel": 0.22
+            }
+            existing_budi.irisan_kunci = [101, 102, 103, 104, 105]
+            existing_budi.total_slices = 224
+            existing_budi.heatmap_url = "/api/v1/cases/1.2.840.113619.2.55.3.281920192/slices/103?gradcam=true"
+            existing_budi.draf_laporan = (
+                "TEMUAN:\n"
+                "Tampak lesi hiperdens abnormal mengarah pada akumulasi hematoma subtipe INTRAPARENKIM "
+                "(skor probabilitas: 0.84) yang teridentifikasi jelas pada irisan kunci #101, #102, #103, #104, #105 "
+                "di regio ganglia basalis / talamus hemisfer kiri. Sulkus kortikalis lokal mendatar. Tidak tampak fraktur impresi kalvaria.\n\n"
+                "KESAN:\n"
+                "Dugaan perdarahan intrakranial subtipe Intraparenkim (ICH) akut pada ganglia basalis / talamus (Skor Studi AI: 0.94). "
+                "Prioritas Triase: MERAH (Gawat Darurat).\n\n"
+                "CATATAN SISTEM:\n"
+                "Dugaan AI, bukan diagnosis. Wajib konfirmasi dokter spesialis radiologi."
+            )
+            existing_budi.laporan_final_dokter = None
+            existing_budi.status_pemeriksaan = "MENUNGGU_VALIDASI"
+            existing_budi.status_fhir = "BELUM_DIKIRIM"
+            db.commit()
+
     count = db.query(RadiologyStudy).count()
     if count > 0:
         return
@@ -195,31 +226,30 @@ def seed_initial_studies_if_empty(db: Session):
             status_fhir="BELUM_DIKIRIM",
             skor_studi=0.94,
             skor_subtipe={
-                "subdural": 0.91,
-                "epidural": 0.18,
-                "intraparenkim": 0.42,
-                "subaraknoid": 0.29,
-                "intraventrikel": 0.05
+                "subdural": 0.0,
+                "epidural": 0.0,
+                "intraparenkim": 0.84,
+                "subaraknoid": 0.02,
+                "intraventrikel": 0.22
             },
             tier="MERAH",
-            irisan_kunci=[14, 16, 18, 19, 21],
-            heatmap_url="/static/heatmaps/std_18.png",
+            irisan_kunci=[101, 102, 103, 104, 105],
+            heatmap_url="/api/v1/cases/1.2.840.113619.2.55.3.281920192/slices/103?gradcam=true",
             draf_laporan=(
                 "TEMUAN:\n"
-                "Tampak area hiperdens berbentuk bulan sabit (crescent-shaped) pada regio frontoparietal hemisfer dekstra "
-                "(irisan kunci #16, #18, #19) berukuran ketebalan maksimal ~14 mm yang mengindikasikan akumulasi hematoma ekstra-aksial. "
-                "Sulkus kortikalis lokal tampak mendatar disertai penekanan ringan pada ventrikel lateral dekstra (midline shift < 2 mm). "
-                "Diferensiasi substansia grisea-alba intraparenkim relatif terpelihara. Tidak tampak garis fraktur pada tulang kalvaria.\n\n"
+                "Tampak lesi hiperdens abnormal mengarah pada akumulasi hematoma subtipe INTRAPARENKIM "
+                "(skor probabilitas: 0.84) yang teridentifikasi jelas pada irisan kunci #101, #102, #103, #104, #105 "
+                "di regio ganglia basalis / talamus hemisfer kiri. Sulkus kortikalis lokal mendatar. Tidak tampak fraktur impresi kalvaria.\n\n"
                 "KESAN:\n"
-                "Dugaan perdarahan intrakranial subtipe Subdural Hemorrhage (SDH) fase akut pada regio hemisfer dekstra (skor studi 0.94). "
-                "Efek desak massa minimal.\n\n"
+                "Dugaan perdarahan intrakranial subtipe Intraparenkim (ICH) akut pada ganglia basalis / talamus (Skor Studi AI: 0.94). "
+                "Prioritas Triase: MERAH (Gawat Darurat).\n\n"
                 "CATATAN SISTEM:\n"
-                "Dugaan AI, bukan diagnosis. Perlu konfirmasi dokter spesialis radiologi."
+                "Dugaan AI, bukan diagnosis. Wajib konfirmasi dokter spesialis radiologi."
             ),
             versi_model="EfficientNet-B0 v1.0",
             ambang=0.50,
             waktu_inferensi=1.42,
-            total_slices=32
+            total_slices=224
         ),
         RadiologyStudy(
             study_uid="1.2.840.113619.2.55.3.489102941",

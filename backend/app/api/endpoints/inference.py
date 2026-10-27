@@ -81,18 +81,47 @@ async def analyze_ct_study(
             simulate_case=simulate_case
         )
 
-        # Simpan atau perbarui data studi ke database agar terdaftar di antrean triase
         eff_uid = result["study_uid"]
+        patient_name = "Pasien Baru"
+        import time
+        no_rm = f"RM-{int(time.time())%1000000:06d}"
+        usia = 50
+        jenis_kelamin = "Laki-laki"
+
+        if "multipart/form-data" in content_type and 'form' in locals():
+            patient_name = form.get("patient_name") or form.get("nama_pasien") or patient_name
+            no_rm = form.get("no_rm") or no_rm
+            if form.get("usia"):
+                try:
+                    usia = int(form.get("usia"))
+                except Exception:
+                    pass
+            jenis_kelamin = form.get("jenis_kelamin") or jenis_kelamin
+        elif 'body' in locals() and isinstance(body, dict):
+            patient_name = body.get("patient_name") or body.get("nama_pasien") or patient_name
+            no_rm = body.get("no_rm") or no_rm
+            if body.get("usia"):
+                try:
+                    usia = int(body.get("usia"))
+                except Exception:
+                    pass
+            jenis_kelamin = body.get("jenis_kelamin") or jenis_kelamin
+
+        if "test" in eff_uid:
+            patient_name = "Tn. Budi (Uji Klinis)"
+
         existing = db.query(RadiologyStudy).filter(RadiologyStudy.study_uid == eff_uid).first()
+        from app.models.database import AuditLog
+
         if not existing:
             new_study = RadiologyStudy(
                 study_uid=eff_uid,
-                patient_name="Tn. Budi (Uji Klinis)" if "test" in eff_uid else f"Pasien {eff_uid[-8:]}",
-                no_rm="RM-994021",
-                usia=54,
-                jenis_kelamin="Laki-laki",
+                patient_name=patient_name,
+                no_rm=no_rm,
+                usia=usia,
+                jenis_kelamin=jenis_kelamin,
                 modalitas="CT Kepala Non-Kontras",
-                waktu_tunggu_menit=12,
+                waktu_tunggu_menit=1,
                 status_pemeriksaan="MENUNGGU_VALIDASI",
                 status_fhir="BELUM_DIKIRIM",
                 skor_studi=result["skor_studi"],
@@ -104,9 +133,18 @@ async def analyze_ct_study(
                 versi_model=result["versi_model"],
                 ambang=result["ambang"],
                 waktu_inferensi=result["waktu_inferensi"],
-                total_slices=24
+                total_slices=result.get("total_slices", 32)
             )
             db.add(new_study)
+            
+            # Catat jejak audit awal
+            log_item = AuditLog(
+                study_uid=eff_uid,
+                event_type="TRIAGE_ASSIGNED",
+                user="AI Smart Triaging",
+                keterangan=f"Inferensi real-time selesai ({result['waktu_inferensi']}s). Tier: {result['tier']}, Skor: {result['skor_studi']}."
+            )
+            db.add(log_item)
             db.commit()
         else:
             existing.skor_studi = result["skor_studi"]
@@ -114,6 +152,8 @@ async def analyze_ct_study(
             existing.tier = result["tier"]
             existing.irisan_kunci = result["irisan_kunci"]
             existing.draf_laporan = result["draf_laporan"]
+            existing.total_slices = result.get("total_slices", existing.total_slices)
+            existing.heatmap_url = result["heatmap_url"]
             db.commit()
 
         return result

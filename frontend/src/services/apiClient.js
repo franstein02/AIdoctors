@@ -48,11 +48,11 @@ export function normalizeStudyData(item) {
 
   // Normalisasi skor_subtipe
   const skorSubtipe = item.skor_subtipe || {
-    subdural: tier === 'MERAH' ? 0.91 : 0.02,
-    epidural: tier === 'MERAH' ? 0.18 : 0.01,
-    intraparenkim: tier === 'MERAH' ? 0.42 : 0.05,
-    subaraknoid: tier === 'MERAH' ? 0.29 : 0.03,
-    intraventrikel: tier === 'MERAH' ? 0.05 : 0.01
+    intraparenkim: tier === 'MERAH' ? 0.84 : 0.05,
+    subdural: tier === 'MERAH' ? 0.0 : 0.01,
+    epidural: tier === 'MERAH' ? 0.0 : 0.01,
+    subaraknoid: tier === 'MERAH' ? 0.02 : 0.02,
+    intraventrikel: tier === 'MERAH' ? 0.22 : 0.01
   };
 
   // Cari subtipe dominan

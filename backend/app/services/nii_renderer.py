@@ -19,25 +19,68 @@ STUDY_MAPPING = {
     "std-00185": "Pasien_4",
 }
 
+def save_uploaded_nii(study_uid: str, file_bytes: bytes, filename: str = "CT.nii") -> str:
+    """Menyimpan berkas NIfTI hasil unggahan dokter/user ke direktori sample_data/uploads."""
+    import gzip
+    upload_dir = os.path.join(SAMPLE_DATA_DIR, "uploads", study_uid)
+    os.makedirs(upload_dir, exist_ok=True)
+    target_path = os.path.join(upload_dir, "CT.nii")
+
+    # Jika file terkompresi .nii.gz, dekompresi ke .nii
+    if filename.endswith(".gz") or file_bytes[:2] == b'\x1f\x8b':
+        try:
+            decompressed = gzip.decompress(file_bytes)
+            with open(target_path, "wb") as f:
+                f.write(decompressed)
+        except Exception:
+            with open(target_path, "wb") as f:
+                f.write(file_bytes)
+    else:
+        with open(target_path, "wb") as f:
+            f.write(file_bytes)
+
+    STUDY_MAPPING[study_uid] = target_path
+    return target_path
+
 def get_nii_path_by_study(study_uid: str) -> str:
     """Mencari path berkas CT.nii berdasarkan folder pasien atau study_uid."""
+    if not study_uid:
+        return ""
+        
     # 1. Cek mapping eksplisit
-    folder_name = STUDY_MAPPING.get(study_uid)
-    if folder_name:
-        path = os.path.join(SAMPLE_DATA_DIR, folder_name, "CT.nii")
+    mapped = STUDY_MAPPING.get(study_uid)
+    if mapped:
+        if os.path.isabs(mapped) and os.path.exists(mapped):
+            return mapped
+        path = os.path.join(SAMPLE_DATA_DIR, mapped, "CT.nii")
         if os.path.exists(path):
             return path
+        if os.path.exists(mapped):
+            return mapped
 
-    # 2. Cek jika study_uid langsung berupa nama folder (misal: "Pasien_1")
+    # 2. Cek direktori upload
+    upload_path = os.path.join(SAMPLE_DATA_DIR, "uploads", study_uid, "CT.nii")
+    if os.path.exists(upload_path):
+        return upload_path
+
+    # 3. Cek jika study_uid langsung berupa nama folder (misal: "Pasien_1")
     direct_path = os.path.join(SAMPLE_DATA_DIR, study_uid, "CT.nii")
     if os.path.exists(direct_path):
         return direct_path
 
-    # 3. Pencarian rekursif di sample_data
-    for root, dirs, files in os.walk(SAMPLE_DATA_DIR):
-        if "CT.nii" in files:
-            return os.path.join(root, "CT.nii")
-            
+    # 4. Cek kandidat folder Pasien_1 s/d Pasien_4 jika study_uid mengandung substring
+    for p in ["Pasien_1", "Pasien_2", "Pasien_3", "Pasien_4"]:
+        if p.lower() in study_uid.lower():
+            p_path = os.path.join(SAMPLE_DATA_DIR, p, "CT.nii")
+            if os.path.exists(p_path):
+                return p_path
+
+    # Fallback default Pasien_1 jika study_uid adalah default std-00192 atau terkait
+    if "192" in study_uid or study_uid == "sample":
+        default_p1 = os.path.join(SAMPLE_DATA_DIR, "Pasien_1", "CT.nii")
+        if os.path.exists(default_p1):
+            return default_p1
+
     return ""
 
 def get_nii_metadata(study_uid: str) -> Dict[str, Any]:

@@ -36,7 +36,7 @@ export default function App() {
     try {
       const queueData = await apiService.getQueue();
       if (Array.isArray(queueData) && queueData.length > 0) {
-        setPatients(queueData);
+        setPatients(queueData.map(normalizeStudyData));
         // Pastikan activePatientId valid
         if (!queueData.some(p => p.id === activePatientId || p.study_uid === activePatientId)) {
           setActivePatientId(queueData[0].study_uid || queueData[0].id);
@@ -181,17 +181,22 @@ export default function App() {
     }
   };
 
-  // Menambahkan studi DICOM baru dari simulasi modal
-  const handleStudyAdded = (newPatient) => {
+  // Menambahkan studi CT / NIfTI baru dari modal unggah atau simulasi
+  const handleStudyAdded = async (newPatient) => {
     const normalized = normalizeStudyData(newPatient);
-    setPatients(prev => [normalized, ...prev]);
-    setActivePatientId(normalized.id || normalized.study_uid);
+    setPatients(prev => [normalized, ...prev.filter(p => (p.study_uid !== normalized.study_uid && p.id !== normalized.id))]);
+    setActivePatientId(normalized.study_uid || normalized.id);
 
     setToast({
-      title: 'Studi DICOM Baru Berhasil Dimuat!',
-      message: `Kasus ${normalized.id} (${normalized.nama_pasien}) telah selesai diinferensi AI. Tier: [${normalized.tier}] Skor: ${normalized.skor_studi.toFixed(2)}.`,
-      patientId: normalized.id
+      title: 'Studi CT Scan Baru Berhasil Dianalisis Real-time!',
+      message: `Kasus ${normalized.study_uid || normalized.id} (${normalized.nama_pasien}) selesai dianalisis AI. Tier: [${normalized.tier}] Skor: ${Number(normalized.skor_studi).toFixed(2)}.`,
+      patientId: normalized.study_uid || normalized.id
     });
+
+    // Refresh antrean backend agar sinkron 100%
+    setTimeout(() => {
+      refreshQueue();
+    }, 300);
   };
 
   return (

@@ -222,6 +222,20 @@ class AIdoctorsTestRunner:
             f.write("\n".join(lines))
         print(f"\n[INFO] Laporan pengujian berhasil disimpan di: {output_file}")
 
+    def cleanup_test_records(self):
+        try:
+            from app.core.database import SessionLocal
+            from app.models.database import RadiologyStudy
+            db = SessionLocal()
+            db.query(RadiologyStudy).filter(
+                (RadiologyStudy.study_uid.like("test-study%")) | 
+                (RadiologyStudy.patient_name.like("%Uji%"))
+            ).delete(synchronize_session=False)
+            db.commit()
+            db.close()
+        except Exception:
+            pass
+
 if __name__ == "__main__":
     print("=" * 60)
     print("MEMULAI PENGUJIAN OTOMATIS SISTEM AIDOCTORS")
@@ -234,6 +248,7 @@ if __name__ == "__main__":
     runner.test_04_smart_triaging_queue()
     runner.test_05_doctor_approval_and_fhir()
     runner.test_06_idempotency_check()
+    runner.cleanup_test_records()
     runner.generate_markdown_report()
     
     print("=" * 60)
