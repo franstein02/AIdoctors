@@ -398,6 +398,14 @@ export default function CaseDetail({
                 ? caseData.irisan_kunci.map(k => typeof k === 'object' ? k.slice : k)
                 : (caseData?.total_slices >= 200 ? [95, 100, 105, 110, 115] : [14, 16, 18, 19, 21])
             }
+            onInsertMeasurement={(summary) => {
+              setDraftText(prev => prev ? `${prev}\n\n${summary}` : summary);
+              setIsEditMode(true);
+              setNotification({
+                type: 'success',
+                message: 'Hasil pengukuran CT workstation berhasil dimasukkan ke draf laporan!'
+              });
+            }}
           />
         </div>
 
