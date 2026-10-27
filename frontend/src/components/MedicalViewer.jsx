@@ -14,6 +14,7 @@ import {
   Redo2, 
   Trash2, 
   RotateCw, 
+  RotateCcw,
   Maximize2, 
   LayoutGrid, 
   Box, 
@@ -27,17 +28,18 @@ import {
   Copy, 
   X,
   Eye,
-  EyeOff
+  EyeOff,
+  Sparkles
 } from 'lucide-react';
 
 // Preset Windowing Medis Standar (Center / Width)
 const WINDOW_PRESETS = {
-  original: { name: 'Original', center: 40, width: 80, contrast: 100, brightness: 100 },
-  brain: { name: 'Otak (Brain)', center: 40, width: 80, contrast: 110, brightness: 100 },
-  subdural: { name: 'Subdural (SDH)', center: 80, width: 200, contrast: 130, brightness: 110 },
-  stroke: { name: 'Stroke / Iskemia', center: 35, width: 35, contrast: 165, brightness: 105 },
-  bone: { name: 'Tulang (Bone)', center: 400, width: 1000, contrast: 190, brightness: 135 },
-  soft: { name: 'Jaringan Lunak', center: 50, width: 350, contrast: 120, brightness: 95 }
+  original: { name: 'Original', center: 40, width: 80, contrast: 100, brightness: 100, desc: 'Tampilan CT Scan Asli (Raw HU)' },
+  brain: { name: 'Otak (Brain)', center: 40, width: 80, contrast: 125, brightness: 102, desc: 'Diferensiasi Substansia Grisea & Alba' },
+  subdural: { name: 'Subdural (SDH)', center: 80, width: 200, contrast: 155, brightness: 112, desc: 'Deteksi Hematoma Subdural/Epidural' },
+  stroke: { name: 'Stroke / Iskemia', center: 35, width: 35, contrast: 190, brightness: 108, desc: 'Deteksi Dini Edema Sitotoksik Iskemia' },
+  bone: { name: 'Tulang (Bone)', center: 400, width: 1000, contrast: 220, brightness: 140, desc: 'Inspeksi Kalvaria & Fraktur Tulang' },
+  soft: { name: 'Jaringan Lunak', center: 50, width: 350, contrast: 120, brightness: 95, desc: 'Jaringan Lunak Ekstrakranial' }
 };
 
 // Kalibrasi Spasial CT Kepala Standar (Matrix 512x512, FOV ~230 mm)
@@ -72,12 +74,12 @@ export default function MedicalViewer({
   // 3. Layout & MPR State
   const [layout, setLayout] = useState('1x1'); // '1x1' | '1x2' | '2x1'
   const [showInfoOverlay, setShowInfoOverlay] = useState(true);
-  const [mprMode, setMprMode] = useState(false); // 3D / MPR view toggle
+  const [mprMode, setMprMode] = useState(false); // 3D Multi-Planar Reconstruction
   const [isFullscreen, setIsFullscreen] = useState(false);
 
-  // 4. Interactive PACS Tools
+  // 4. Interactive PACS Tools (Default otomatis ke 'pan' seperti diminta)
   // 'window' | 'pan' | 'zoom' | 'stack' | 'length' | 'angle' | 'rect' | 'circle' | 'freehand' | 'probe'
-  const [activeTool, setActiveTool] = useState('length');
+  const [activeTool, setActiveTool] = useState('pan');
 
   // 5. Annotations & Measurement Stacks
   const [measurements, setMeasurements] = useState([]);
@@ -86,12 +88,55 @@ export default function MedicalViewer({
   const [anglePoints, setAnglePoints] = useState([]);
   const [probeData, setProbeData] = useState(null);
 
-  // Popover menus & modals
+  // Dropdowns, Popovers, & Notifikasi Toast
   const [showPresetMenu, setShowPresetMenu] = useState(false);
   const [showLayoutMenu, setShowLayoutMenu] = useState(false);
   const [showMouseHelp, setShowMouseHelp] = useState(false);
   const [showReportModal, setShowReportModal] = useState(false);
   const [copiedReport, setCopiedReport] = useState(false);
+  const [toastNotification, setToastNotification] = useState(null);
+
+  // Posisi Fixed untuk Dropdowns (Mencegah menu terpotong saat toolbar di-scroll horizontal)
+  const [layoutMenuPos, setLayoutMenuPos] = useState({ top: 0, left: 0 });
+  const [presetMenuPos, setPresetMenuPos] = useState({ top: 0, left: 0 });
+  const [mouseHelpPos, setMouseHelpPos] = useState({ top: 0, left: 0 });
+
+  // Handler Buka Menu dengan Posisi Fixed Layar
+  const handleOpenLayoutMenu = (e) => {
+    e.stopPropagation();
+    const rect = e.currentTarget.getBoundingClientRect();
+    setLayoutMenuPos({ 
+      top: rect.bottom + 6, 
+      left: Math.max(10, Math.min(window.innerWidth - 200, rect.left)) 
+    });
+    setShowLayoutMenu(prev => !prev);
+    setShowPresetMenu(false);
+    setShowMouseHelp(false);
+  };
+
+  const handleOpenPresetMenu = (e) => {
+    e.stopPropagation();
+    const rect = e.currentTarget.getBoundingClientRect();
+    setPresetMenuPos({ 
+      top: rect.bottom + 6, 
+      left: Math.max(10, Math.min(window.innerWidth - 225, rect.left - 50)) 
+    });
+    setShowPresetMenu(prev => !prev);
+    setShowLayoutMenu(false);
+    setShowMouseHelp(false);
+  };
+
+  const handleOpenMouseHelp = (e) => {
+    e.stopPropagation();
+    const rect = e.currentTarget.getBoundingClientRect();
+    setMouseHelpPos({ 
+      top: rect.bottom + 6, 
+      left: Math.max(10, Math.min(window.innerWidth - 300, rect.left - 60)) 
+    });
+    setShowMouseHelp(prev => !prev);
+    setShowLayoutMenu(false);
+    setShowPresetMenu(false);
+  };
 
   // Drag interaction refs
   const containerRef = useRef(null);
@@ -110,6 +155,14 @@ export default function MedicalViewer({
   });
 
   const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000/api/v1';
+
+  // Helper Toast
+  const showToast = (msg, duration = 3000) => {
+    setToastNotification(msg);
+    setTimeout(() => {
+      setToastNotification((prev) => (prev === msg ? null : prev));
+    }, duration);
+  };
 
   // Sinkronisasi saat initialSlice atau studyUid berubah
   useEffect(() => {
@@ -144,17 +197,26 @@ export default function MedicalViewer({
     return () => document.removeEventListener('fullscreenchange', onFsChange);
   }, []);
 
-  // Close menus on outside click
+  // Tutup menu saat klik luar atau saat toolbar di-scroll
   useEffect(() => {
     const handleClickOutside = (e) => {
-      if (!e.target.closest('.toolbar-dropdown')) {
+      if (!e.target.closest('.toolbar-dropdown-menu') && !e.target.closest('.toolbar-dropdown-btn')) {
         setShowPresetMenu(false);
         setShowLayoutMenu(false);
         setShowMouseHelp(false);
       }
     };
+    const handleScrollClose = () => {
+      setShowPresetMenu(false);
+      setShowLayoutMenu(false);
+      setShowMouseHelp(false);
+    };
     window.addEventListener('click', handleClickOutside);
-    return () => window.removeEventListener('click', handleClickOutside);
+    window.addEventListener('scroll', handleScrollClose, true);
+    return () => {
+      window.removeEventListener('click', handleClickOutside);
+      window.removeEventListener('scroll', handleScrollClose, true);
+    };
   }, []);
 
   // URL dinamis citra NIfTI
@@ -174,7 +236,73 @@ export default function MedicalViewer({
     if (p) {
       setContrast(p.contrast);
       setBrightness(p.brightness);
+      showToast(`Preset Window: ${p.name} (WL: ${p.center} / WW: ${p.width})`);
     }
+  };
+
+  // Siklus Cepat Preset Windowing saat tombol diklik
+  const handleCyclePreset = () => {
+    const keys = Object.keys(WINDOW_PRESETS);
+    const currentIndex = keys.indexOf(activeWindowPreset);
+    const nextKey = keys[(currentIndex + 1) % keys.length];
+    handleWindowPresetChange(nextKey);
+  };
+
+  // Toggle Mode Tata Letak (1x1 <-> 1x2)
+  const handleToggleLayout = () => {
+    const nextLayout = layout === '1x1' ? '1x2' : '1x1';
+    setLayout(nextLayout);
+    setShowLayoutMenu(false);
+    showToast(nextLayout === '1x2' ? 'Tata Letak 1×2: Komparasi Dual CT Polos vs Heatmap AI' : 'Tata Letak 1×1: Tampilan Aksial Tunggal');
+  };
+
+  // Toggle Mode 3D MPR (Multi-Planar Reconstruction)
+  const handleToggleMPR = () => {
+    const nextMpr = !mprMode;
+    setMprMode(nextMpr);
+    showToast(nextMpr ? 'Mode 3D MPR Aktif: 3 Bidang Rekonstruksi (Aksial, Sagital, Koronal)' : 'Mode 3D MPR Nonaktif: Kembali ke Tampilan Standar');
+  };
+
+  // ================= MASTER RESET: MENGEMBALIKAN SEMUA KE AWAL =================
+  const handleResetAll = () => {
+    // 1. Reset Transform
+    setScale(1.0);
+    setPan({ x: 0, y: 0 });
+    setRotation(0);
+    setFlipH(false);
+    setFlipV(false);
+    setInvert(false);
+
+    // 2. Reset Windowing Presets
+    setContrast(100);
+    setBrightness(100);
+    setActiveWindowPreset('original');
+
+    // 3. Reset Active Tool to Pan
+    setActiveTool('pan');
+
+    // 4. Reset Opacity & Heatmap
+    setShowGradcam(true);
+    setOpacity(0.65);
+    setDebouncedOpacity(0.65);
+
+    // 5. Reset Layout & MPR
+    setLayout('1x1');
+    setMprMode(false);
+
+    // 6. Reset Measurements & Drawing
+    setMeasurements([]);
+    setRedoStack([]);
+    setActiveDrawing(null);
+    setAnglePoints([]);
+    setProbeData(null);
+
+    // 7. Reset Slice back to Initial Key Slice
+    setCurrentSlice(initialSlice);
+    setDebouncedSlice(initialSlice);
+
+    // 8. Tampilkan feedback sukses
+    showToast('✓ Semua pengaturan (Zoom, Pan, Opasitas 65%, Preset, dan Anotasi) berhasil dikembalikan ke awal!', 3500);
   };
 
   // Konversi koordinat layar ke koordinat gambar 512x512 secara matematis eksak
@@ -485,7 +613,6 @@ export default function MedicalViewer({
       } else if (activeDrawing.type === 'freehand') {
         const pts = activeDrawing.points;
         if (pts.length > 5) {
-          // Hitung luas poligon menggunakan rumus Shoelace
           let areaPx = 0;
           let perimeterPx = 0;
           for (let i = 0; i < pts.length; i++) {
@@ -498,7 +625,6 @@ export default function MedicalViewer({
           const areaCm2 = (areaMm2 / 100).toFixed(2);
           const perimeterMm = (perimeterPx * PIXEL_SPACING_MM).toFixed(1);
 
-          // Titik pusat rata-rata untuk penempatan label
           const avgX = Math.round(pts.reduce((sum, p) => sum + p.x, 0) / pts.length);
           const avgY = Math.round(pts.reduce((sum, p) => sum + p.y, 0) / pts.length);
 
@@ -538,7 +664,7 @@ export default function MedicalViewer({
     }
   };
 
-  // Reset Tampilan ke Ukuran Standar (100% Fit)
+  // Reset Tampilan Cepat ke Ukuran Standar (100% Fit)
   const handleResetView = () => {
     setScale(1.0);
     setPan({ x: 0, y: 0 });
@@ -546,7 +672,7 @@ export default function MedicalViewer({
     setFlipH(false);
     setFlipV(false);
     setInvert(false);
-    handleWindowPresetChange('original');
+    setActiveTool('pan');
   };
 
   // Batalkan Anotasi Terakhir (Undo)
@@ -571,6 +697,7 @@ export default function MedicalViewer({
     setRedoStack([]);
     setAnglePoints([]);
     setProbeData(null);
+    showToast('Anotasi dan pengukuran berhasil dibersihkan.');
   };
 
   // Toggle Fullscreen Native
@@ -626,12 +753,24 @@ export default function MedicalViewer({
   };
 
   // Render SVG Anotasi & Garis Pengukuran
-  const renderSvgOverlay = () => {
+  const renderSvgOverlay = (scoutLines = false) => {
     return (
       <svg 
         className="absolute inset-0 w-full h-full pointer-events-none select-none z-10"
         viewBox="0 0 512 512"
       >
+        {/* Garis Crosshair Scout Reference untuk Mode MPR */}
+        {scoutLines && (
+          <g opacity="0.65">
+            {/* Garis Potongan Koronal (Horizontal Cyan) */}
+            <line x1="0" y1="256" x2="512" y2="256" stroke="#06B6D4" strokeWidth="1" strokeDasharray="4 4" />
+            <text x="10" y="250" fill="#06B6D4" fontSize="10" fontFamily="monospace">Bidang Koronal</text>
+            {/* Garis Potongan Sagital (Vertikal Amber) */}
+            <line x1="256" y1="0" x2="256" y2="512" stroke="#F59E0B" strokeWidth="1" strokeDasharray="4 4" />
+            <text x="262" y="20" fill="#F59E0B" fontSize="10" fontFamily="monospace">Bidang Sagital</text>
+          </g>
+        )}
+
         {/* Anotasi Tersimpan */}
         {measurements.map((m) => {
           if (m.type === 'length') {
@@ -640,12 +779,10 @@ export default function MedicalViewer({
             const ticks = getCaliperTickCoords(m.x1, m.y1, m.x2, m.y2, 7);
             return (
               <g key={m.id}>
-                {/* Garis Ukur Caliper Neon */}
                 <line 
                   x1={m.x1} y1={m.y1} x2={m.x2} y2={m.y2} 
                   stroke="#10B981" strokeWidth="2" strokeDasharray="3 2"
                 />
-                {/* Titik & Caliper End-ticks */}
                 {ticks && (
                   <>
                     <line x1={ticks.t1_a.x} y1={ticks.t1_a.y} x2={ticks.t1_b.x} y2={ticks.t1_b.y} stroke="#10B981" strokeWidth="2" />
@@ -654,7 +791,6 @@ export default function MedicalViewer({
                 )}
                 <circle cx={m.x1} cy={m.y1} r="3.5" fill="#10B981" />
                 <circle cx={m.x2} cy={m.y2} r="3.5" fill="#10B981" />
-                {/* Badge Label Ukuran dalam Millimeter */}
                 <rect 
                   x={midX - 30} y={midY - 18} width="60" height="18" rx="4" 
                   fill="rgba(15, 23, 42, 0.88)" stroke="#10B981" strokeWidth="1"
@@ -883,375 +1019,438 @@ export default function MedicalViewer({
       }`}
     >
       
-      {/* ================= 1. TOOLBAR WORKSTATION MEDIS AIDOCTORS PACS ================= */}
+      {/* ================= 1. TOOLBAR WORKSTATION MEDIS AIDOCTORS PACS (BISA DI-SCROLL HORIZONTAL) ================= */}
       <div 
         onContextMenu={(e) => e.preventDefault()}
-        className="bg-[#0D1527] border-b border-slate-800/90 px-3 py-1.5 flex items-center justify-between gap-1 overflow-x-auto text-slate-300 scrollbar-none"
+        onWheel={(e) => {
+          // Scroll horizontal dengan roda mouse saat kursor berada di atas toolbar
+          if (e.deltaY !== 0) {
+            e.currentTarget.scrollLeft += e.deltaY;
+          }
+        }}
+        className="relative z-30 bg-[#0D1527] border-b border-slate-800/90 px-3 py-1.5 flex items-center overflow-x-auto text-slate-300 scrollbar-thin scrollbar-thumb-slate-700/80 hover:scrollbar-thumb-slate-600 select-none min-w-0"
       >
-        
-        {/* Brand / Logo AIdoctors Workstation */}
-        <div className="flex items-center space-x-2 pr-3 border-r border-slate-800 flex-shrink-0">
-          <div className="w-5 h-5 rounded bg-gradient-to-tr from-cyan-600 to-blue-500 flex items-center justify-center font-black text-[10px] text-white shadow-sm shadow-cyan-500/30">
-            AI
-          </div>
-          <span className="font-bold text-sm tracking-wide text-white">
-            <span className="text-cyan-400">AI</span>doctors
-          </span>
-        </div>
-
-        {/* Grup 1: Windowing, Pan, Zoom, Stack, Length, Angle, ROIs, Probe, Mouse, Undo, Redo, Trash */}
-        <div className="flex items-center space-x-1 flex-shrink-0">
+        <div className="flex items-center gap-1.5 min-w-max pr-6">
           
-          {/* 1. WW/WL (Contrast / Windowing) */}
-          <button
-            onClick={() => setActiveTool('window')}
-            className={getToolBtnClass('window')}
-            title="Window / Level (WW/WL) Kontras (Klik/Drag horizontal & vertikal)"
-          >
-            <Contrast className="w-4 h-4" />
-          </button>
+          {/* Brand / Logo AIdoctors Workstation */}
+          <div className="flex items-center space-x-2 pr-3 border-r border-slate-800 flex-shrink-0">
+            <div className="w-5 h-5 rounded bg-gradient-to-tr from-cyan-600 to-blue-500 flex items-center justify-center font-black text-[10px] text-white shadow-sm shadow-cyan-500/30">
+              AI
+            </div>
+            <span className="font-bold text-sm tracking-wide text-white">
+              <span className="text-cyan-400">AI</span>doctors
+            </span>
+          </div>
 
-          {/* 2. Pan / Move */}
-          <button
-            onClick={() => setActiveTool('pan')}
-            className={getToolBtnClass('pan')}
-            title="Pan / Geser Posisi Citra (P atau Middle Click Drag)"
-          >
-            <Move className="w-4 h-4" />
-          </button>
-
-          {/* 3. Zoom */}
-          <button
-            onClick={() => setActiveTool('zoom')}
-            className={getToolBtnClass('zoom')}
-            title="Zoom In / Out Interaktif (Drag vertikal atau Scroll Roda Mouse)"
-          >
-            <ZoomIn className="w-4 h-4" />
-          </button>
-
-          {/* 4. Stack / Scroll Irisan */}
-          <button
-            onClick={() => setActiveTool('stack')}
-            className={getToolBtnClass('stack')}
-            title="Stack Scroll: Gulir Irisan Melalui Drag Vertikal"
-          >
-            <Layers className="w-4 h-4" />
-          </button>
-
-          {/* 5. Length / Caliper Ruler (mm) */}
-          <button
-            onClick={() => setActiveTool('length')}
-            className={getToolBtnClass('length')}
-            title="Length / Caliper Penggaris Jarak Medis (mm)"
-          >
-            <Ruler className="w-4 h-4" />
-          </button>
-
-          {/* 6. Angle Measurement */}
-          <button
-            onClick={() => {
-              setActiveTool('angle');
-              setAnglePoints([]);
-            }}
-            className={getToolBtnClass('angle')}
-            title="Angle / Pengukur Sudut Derajat 3 Titik"
-          >
-            <svg viewBox="0 0 24 24" className="w-4 h-4" stroke="currentColor" strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M20 19 L5 19 L15 5" />
-              <path d="M10 19 A6 6 0 0 1 12 14" strokeWidth="1.5" />
-            </svg>
-          </button>
-
-          {/* 7. Rectangle ROI */}
-          <button
-            onClick={() => setActiveTool('rect')}
-            className={getToolBtnClass('rect')}
-            title="Rectangle ROI: Pengukur Luas Area Persegi (cm²)"
-          >
-            <Square className="w-4 h-4" />
-          </button>
-
-          {/* 8. Circle ROI */}
-          <button
-            onClick={() => setActiveTool('circle')}
-            className={getToolBtnClass('circle')}
-            title="Circle ROI: Pengukur Luas Area Lingkaran (cm²)"
-          >
-            <CircleIcon className="w-4 h-4" />
-          </button>
-
-          {/* 9. Freehand / Ellipse ROI */}
-          <button
-            onClick={() => setActiveTool('freehand')}
-            className={getToolBtnClass('freehand')}
-            title="Freehand ROI: Gambar Kontur Bebas Lesi Hematoma (cm²)"
-          >
-            <svg viewBox="0 0 24 24" className="w-4 h-4" stroke="currentColor" strokeWidth="2" fill="none" strokeLinecap="round">
-              <ellipse cx="12" cy="12" rx="8" ry="5.5" />
-            </svg>
-          </button>
-
-          {/* 10. Probe / Crosshair HU */}
-          <button
-            onClick={() => setActiveTool('probe')}
-            className={getToolBtnClass('probe')}
-            title="Probe / Crosshair: Inspeksi Nilai Densitas Hounsfield Unit (HU)"
-          >
-            <Crosshair className="w-4 h-4" />
-          </button>
-
-          {/* 11. Mouse Shortcut Guide */}
-          <div className="relative toolbar-dropdown">
+          {/* Grup 1: Windowing, Pan, Zoom, Stack, Length, Angle, ROIs, Probe, Mouse, Undo, Redo, Trash */}
+          <div className="flex items-center space-x-1 flex-shrink-0">
+            
+            {/* 1. WW/WL (Contrast / Windowing) */}
             <button
-              onClick={() => setShowMouseHelp(prev => !prev)}
+              onClick={() => setActiveTool('window')}
+              className={getToolBtnClass('window')}
+              title="Window / Level (WW/WL) Kontras (Klik/Drag horizontal & vertikal)"
+            >
+              <Contrast className="w-4 h-4" />
+            </button>
+
+            {/* 2. Pan / Move (Default Aktif) */}
+            <button
+              onClick={() => setActiveTool('pan')}
+              className={getToolBtnClass('pan')}
+              title="Pan / Geser Posisi Citra (Aktif Otomatis)"
+            >
+              <Move className="w-4 h-4" />
+            </button>
+
+            {/* 3. Zoom */}
+            <button
+              onClick={() => setActiveTool('zoom')}
+              className={getToolBtnClass('zoom')}
+              title="Zoom In / Out Interaktif (Drag vertikal atau Scroll Roda Mouse)"
+            >
+              <ZoomIn className="w-4 h-4" />
+            </button>
+
+            {/* 4. Stack / Scroll Irisan */}
+            <button
+              onClick={() => setActiveTool('stack')}
+              className={getToolBtnClass('stack')}
+              title="Stack Scroll: Gulir Irisan Melalui Drag Vertikal"
+            >
+              <Layers className="w-4 h-4" />
+            </button>
+
+            {/* 5. Length / Caliper Ruler (mm) */}
+            <button
+              onClick={() => setActiveTool('length')}
+              className={getToolBtnClass('length')}
+              title="Length / Caliper Penggaris Jarak Medis (mm)"
+            >
+              <Ruler className="w-4 h-4" />
+            </button>
+
+            {/* 6. Angle Measurement */}
+            <button
+              onClick={() => {
+                setActiveTool('angle');
+                setAnglePoints([]);
+              }}
+              className={getToolBtnClass('angle')}
+              title="Angle / Pengukur Sudut Derajat 3 Titik"
+            >
+              <svg viewBox="0 0 24 24" className="w-4 h-4" stroke="currentColor" strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M20 19 L5 19 L15 5" />
+                <path d="M10 19 A6 6 0 0 1 12 14" strokeWidth="1.5" />
+              </svg>
+            </button>
+
+            {/* 7. Rectangle ROI */}
+            <button
+              onClick={() => setActiveTool('rect')}
+              className={getToolBtnClass('rect')}
+              title="Rectangle ROI: Pengukur Luas Area Persegi (cm²)"
+            >
+              <Square className="w-4 h-4" />
+            </button>
+
+            {/* 8. Circle ROI */}
+            <button
+              onClick={() => setActiveTool('circle')}
+              className={getToolBtnClass('circle')}
+              title="Circle ROI: Pengukur Luas Area Lingkaran (cm²)"
+            >
+              <CircleIcon className="w-4 h-4" />
+            </button>
+
+            {/* 9. Freehand / Ellipse ROI */}
+            <button
+              onClick={() => setActiveTool('freehand')}
+              className={getToolBtnClass('freehand')}
+              title="Freehand ROI: Gambar Kontur Bebas Lesi Hematoma (cm²)"
+            >
+              <svg viewBox="0 0 24 24" className="w-4 h-4" stroke="currentColor" strokeWidth="2" fill="none" strokeLinecap="round">
+                <ellipse cx="12" cy="12" rx="8" ry="5.5" />
+              </svg>
+            </button>
+
+            {/* 10. Probe / Crosshair HU */}
+            <button
+              onClick={() => setActiveTool('probe')}
+              className={getToolBtnClass('probe')}
+              title="Probe / Crosshair: Inspeksi Nilai Densitas Hounsfield Unit (HU)"
+            >
+              <Crosshair className="w-4 h-4" />
+            </button>
+
+            {/* 11. Mouse Shortcut Guide */}
+            <div className="relative toolbar-dropdown">
+              <button
+                onClick={handleOpenMouseHelp}
+                className="toolbar-dropdown-btn border border-transparent text-slate-400 hover:text-slate-200 hover:bg-slate-800/60 p-1.5 rounded transition-all"
+                title="Panduan Navigasi & Binding Tombol Mouse"
+              >
+                <Mouse className="w-4 h-4" />
+              </button>
+
+              {showMouseHelp && (
+                <div 
+                  onClick={(e) => e.stopPropagation()}
+                  style={{ top: `${mouseHelpPos.top}px`, left: `${mouseHelpPos.left}px` }}
+                  className="fixed toolbar-dropdown-menu bg-slate-900 border border-slate-700 rounded-lg p-3 shadow-2xl z-[99999] w-72 text-xs space-y-2 backdrop-blur-md"
+                >
+                  <div className="flex items-center justify-between pb-1.5 border-b border-slate-800">
+                    <span className="font-bold text-white flex items-center gap-1.5">
+                      <Mouse className="w-3.5 h-3.5 text-cyan-400" /> Pintasan Mouse PACS
+                    </span>
+                    <button onClick={() => setShowMouseHelp(false)} className="text-slate-400 hover:text-white">
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                  <div className="space-y-1.5 text-slate-300 font-mono text-[11px]">
+                    <p className="m-0"><strong className="text-cyan-400">Klik Kiri:</strong> Tool aktif ({activeTool})</p>
+                    <p className="m-0"><strong className="text-cyan-400">Klik Kanan + Drag:</strong> Window/Level (WW/WL)</p>
+                    <p className="m-0"><strong className="text-cyan-400">Klik Tengah + Drag:</strong> Pan / Geser Citra</p>
+                    <p className="m-0"><strong className="text-cyan-400">Scroll Roda Mouse:</strong> Gulir Irisan CT (0-{totalSlices - 1})</p>
+                    <p className="m-0"><strong className="text-cyan-400">Ctrl + Scroll:</strong> Zoom In / Out Halus</p>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* 12. Undo */}
+            <button
+              onClick={handleUndo}
+              disabled={measurements.length === 0}
+              className="border border-transparent text-slate-400 hover:text-slate-200 hover:bg-slate-800/60 p-1.5 rounded transition-all disabled:opacity-30 disabled:pointer-events-none"
+              title="Undo: Batalkan Anotasi Terakhir"
+            >
+              <Undo2 className="w-4 h-4" />
+            </button>
+
+            {/* 13. Redo */}
+            <button
+              onClick={handleRedo}
+              disabled={redoStack.length === 0}
+              className="border border-transparent text-slate-400 hover:text-slate-200 hover:bg-slate-800/60 p-1.5 rounded transition-all disabled:opacity-30 disabled:pointer-events-none"
+              title="Redo: Kembalikan Anotasi"
+            >
+              <Redo2 className="w-4 h-4" />
+            </button>
+
+            {/* 14. Trash / Clear All */}
+            <button
+              onClick={handleClearAll}
+              disabled={measurements.length === 0 && !probeData}
+              className="border border-transparent text-slate-400 hover:text-red-400 hover:bg-red-950/40 p-1.5 rounded transition-all disabled:opacity-30 disabled:pointer-events-none"
+              title="Hapus Seluruh Anotasi & Pengukuran"
+            >
+              <Trash2 className="w-4 h-4" />
+            </button>
+
+          </div>
+
+          {/* Divider 1 */}
+          <div className="h-5 w-[1px] bg-slate-800 mx-1 flex-shrink-0" />
+
+          {/* Grup 2: Invert, Rotate, Flip, Fullscreen, dan MASTER RESET SEMUA */}
+          <div className="flex items-center space-x-1 flex-shrink-0">
+            
+            {/* 15. Invert Klise Negatif */}
+            <button
+              onClick={() => setInvert(prev => !prev)}
+              className={`p-1.5 rounded transition-all ${
+                invert ? 'bg-amber-600/30 text-amber-300 border border-amber-500/40' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60 border border-transparent'
+              }`}
+              title="Invert: Balik Warna Grayscale / Klise Negatif"
+            >
+              <svg viewBox="0 0 24 24" className="w-4 h-4" stroke="currentColor" strokeWidth="2" fill="none">
+                <rect x="4" y="4" width="16" height="16" rx="2" />
+                <path d="M4 20 L20 4" strokeWidth="1.5" />
+                <path d="M4 4 L20 4 L20 20 Z" fill="currentColor" opacity="0.85" />
+              </svg>
+            </button>
+
+            {/* 16. Rotate 90° CW */}
+            <button
+              onClick={() => setRotation(prev => (prev + 90) % 360)}
               className="border border-transparent text-slate-400 hover:text-slate-200 hover:bg-slate-800/60 p-1.5 rounded transition-all"
-              title="Panduan Navigasi & Binding Tombol Mouse"
+              title="Rotasi 90° Searah Jarum Jam"
             >
-              <Mouse className="w-4 h-4" />
+              <RotateCw className="w-4 h-4" />
             </button>
 
-            {showMouseHelp && (
-              <div className="absolute top-full left-0 mt-2 bg-slate-900 border border-slate-700 rounded-lg p-3 shadow-2xl z-50 w-72 text-xs space-y-2">
-                <div className="flex items-center justify-between pb-1.5 border-b border-slate-800">
-                  <span className="font-bold text-white flex items-center gap-1.5">
-                    <Mouse className="w-3.5 h-3.5 text-cyan-400" /> Pintasan Mouse PACS
-                  </span>
-                  <button onClick={() => setShowMouseHelp(false)} className="text-slate-400 hover:text-white">
-                    <X className="w-3.5 h-3.5" />
-                  </button>
-                </div>
-                <div className="space-y-1.5 text-slate-300 font-mono text-[11px]">
-                  <p className="m-0"><strong className="text-cyan-400">Klik Kiri:</strong> Tool aktif ({activeTool})</p>
-                  <p className="m-0"><strong className="text-cyan-400">Klik Kanan + Drag:</strong> Window/Level (WW/WL)</p>
-                  <p className="m-0"><strong className="text-cyan-400">Klik Tengah + Drag:</strong> Pan / Geser Citra</p>
-                  <p className="m-0"><strong className="text-cyan-400">Scroll Roda Mouse:</strong> Gulir Irisan CT (0-{totalSlices - 1})</p>
-                  <p className="m-0"><strong className="text-cyan-400">Ctrl + Scroll:</strong> Zoom In / Out Halus</p>
-                </div>
-              </div>
-            )}
+            {/* 17. Flip Horizontal (<|>) */}
+            <button
+              onClick={() => setFlipH(prev => !prev)}
+              className={`p-1.5 rounded transition-all ${
+                flipH ? 'bg-cyan-600/30 text-cyan-300 border border-cyan-500/40' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60 border border-transparent'
+              }`}
+              title="Pembalikan Horizontal (Flip H)"
+            >
+              <svg viewBox="0 0 24 24" className="w-4 h-4" stroke="currentColor" strokeWidth="2" fill="none" strokeLinecap="round">
+                <line x1="12" y1="3" x2="12" y2="21" strokeDasharray="2 2" />
+                <path d="M5 12 L9 7 L9 17 Z" fill="currentColor" />
+                <path d="M19 12 L15 7 L15 17 Z" fill="currentColor" />
+              </svg>
+            </button>
+
+            {/* 18. Fullscreen Viewport */}
+            <button
+              onClick={handleToggleFullscreen}
+              className={`p-1.5 rounded transition-all ${
+                isFullscreen ? 'bg-cyan-600/30 text-cyan-300 border border-cyan-500/40' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60 border border-transparent'
+              }`}
+              title="Layar Penuh (Fullscreen)"
+            >
+              <Maximize2 className="w-4 h-4" />
+            </button>
+
+            {/* ================= TOMBOL UTAMA: RESET SEMUA KE AWAL ================= */}
+            <button
+              onClick={handleResetAll}
+              className="px-2 py-1 rounded text-xs font-semibold bg-slate-800 hover:bg-red-950/70 text-amber-300 hover:text-red-300 border border-slate-700 hover:border-red-800/80 flex items-center gap-1.5 transition-all shadow-sm"
+              title="Reset Semua: Mengembalikan Zoom (100%), Pan (Tengah), Opasitas (65%), Presets, Alat, dan Menghapus Seluruh Anotasi"
+            >
+              <RotateCcw className="w-3.5 h-3.5 text-amber-400" />
+              <span className="hidden sm:inline font-mono">Reset</span>
+            </button>
+
           </div>
 
-          {/* 12. Undo */}
-          <button
-            onClick={handleUndo}
-            disabled={measurements.length === 0}
-            className="border border-transparent text-slate-400 hover:text-slate-200 hover:bg-slate-800/60 p-1.5 rounded transition-all disabled:opacity-30 disabled:pointer-events-none"
-            title="Undo: Batalkan Anotasi Terakhir"
-          >
-            <Undo2 className="w-4 h-4" />
-          </button>
+          {/* Divider 2 */}
+          <div className="h-5 w-[1px] bg-slate-800 mx-1 flex-shrink-0" />
 
-          {/* 13. Redo */}
-          <button
-            onClick={handleRedo}
-            disabled={redoStack.length === 0}
-            className="border border-transparent text-slate-400 hover:text-slate-200 hover:bg-slate-800/60 p-1.5 rounded transition-all disabled:opacity-30 disabled:pointer-events-none"
-            title="Redo: Kembalikan Anotasi"
-          >
-            <Redo2 className="w-4 h-4" />
-          </button>
+          {/* Grup 3: Layout Dropdown (1x1 / 1x2), 3D Cube / MPR, Preset Dropdown (Original / Otak / Tulang / dll) */}
+          <div className="flex items-center space-x-1.5 flex-shrink-0">
+            
+            {/* 19. Layout Selector (1x1 / 1x2) */}
+            <div className="relative toolbar-dropdown">
+              <button
+                onClick={handleOpenLayoutMenu}
+                className={`toolbar-dropdown-btn px-2.5 py-1.5 rounded text-xs font-mono font-bold transition-all border flex items-center gap-1.5 ${
+                  layout === '1x2' 
+                    ? 'bg-blue-600/40 text-blue-300 border-blue-500 shadow-[0_0_8px_rgba(59,130,246,0.3)]' 
+                    : 'bg-slate-900/80 hover:bg-slate-800 border-slate-700 text-slate-200'
+                }`}
+                title="Pilih Tata Letak: 1×1 Tunggal atau 1×2 Dual Komparasi CT Polos vs Heatmap"
+              >
+                <LayoutGrid className="w-3.5 h-3.5 text-cyan-400" />
+                <span>{layout}</span>
+                <span className="text-[9px] text-slate-400">▼</span>
+              </button>
 
-          {/* 14. Trash / Clear All */}
-          <button
-            onClick={handleClearAll}
-            disabled={measurements.length === 0 && !probeData}
-            className="border border-transparent text-slate-400 hover:text-red-400 hover:bg-red-950/40 p-1.5 rounded transition-all disabled:opacity-30 disabled:pointer-events-none"
-            title="Hapus Seluruh Anotasi & Pengukuran"
-          >
-            <Trash2 className="w-4 h-4" />
-          </button>
-
-        </div>
-
-        {/* Divider 1 */}
-        <div className="h-5 w-[1px] bg-slate-800 mx-1 flex-shrink-0" />
-
-        {/* Grup 2: Invert, Rotate, Flip, Fullscreen */}
-        <div className="flex items-center space-x-1 flex-shrink-0">
-          
-          {/* 15. Invert Klise Negatif */}
-          <button
-            onClick={() => setInvert(prev => !prev)}
-            className={`p-1.5 rounded transition-all ${
-              invert ? 'bg-amber-600/30 text-amber-300 border border-amber-500/40' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60 border border-transparent'
-            }`}
-            title="Invert: Balik Warna Grayscale / Klise Negatif"
-          >
-            <svg viewBox="0 0 24 24" className="w-4 h-4" stroke="currentColor" strokeWidth="2" fill="none">
-              <rect x="4" y="4" width="16" height="16" rx="2" />
-              <path d="M4 20 L20 4" strokeWidth="1.5" />
-              <path d="M4 4 L20 4 L20 20 Z" fill="currentColor" opacity="0.85" />
-            </svg>
-          </button>
-
-          {/* 16. Rotate 90° CW */}
-          <button
-            onClick={() => setRotation(prev => (prev + 90) % 360)}
-            className="border border-transparent text-slate-400 hover:text-slate-200 hover:bg-slate-800/60 p-1.5 rounded transition-all"
-            title="Rotasi 90° Searah Jarum Jam"
-          >
-            <RotateCw className="w-4 h-4" />
-          </button>
-
-          {/* 17. Flip Horizontal (<|>) */}
-          <button
-            onClick={() => setFlipH(prev => !prev)}
-            className={`p-1.5 rounded transition-all ${
-              flipH ? 'bg-cyan-600/30 text-cyan-300 border border-cyan-500/40' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60 border border-transparent'
-            }`}
-            title="Pembalikan Horizontal (Flip H)"
-          >
-            <svg viewBox="0 0 24 24" className="w-4 h-4" stroke="currentColor" strokeWidth="2" fill="none" strokeLinecap="round">
-              <line x1="12" y1="3" x2="12" y2="21" strokeDasharray="2 2" />
-              <path d="M5 12 L9 7 L9 17 Z" fill="currentColor" />
-              <path d="M19 12 L15 7 L15 17 Z" fill="currentColor" />
-            </svg>
-          </button>
-
-          {/* 18. Fullscreen Viewport */}
-          <button
-            onClick={handleToggleFullscreen}
-            className={`p-1.5 rounded transition-all ${
-              isFullscreen ? 'bg-cyan-600/30 text-cyan-300 border border-cyan-500/40' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60 border border-transparent'
-            }`}
-            title="Layar Penuh (Fullscreen)"
-          >
-            <Maximize2 className="w-4 h-4" />
-          </button>
-
-        </div>
-
-        {/* Divider 2 */}
-        <div className="h-5 w-[1px] bg-slate-800 mx-1 flex-shrink-0" />
-
-        {/* Grup 3: Layout Dropdown (1x1), 3D Cube / MPR, Preset Dropdown (Original) */}
-        <div className="flex items-center space-x-1 flex-shrink-0">
-          
-          {/* 19. Layout Selector (1x1 v) */}
-          <div className="relative toolbar-dropdown">
-            <button
-              onClick={() => {
-                setShowLayoutMenu(prev => !prev);
-                setShowPresetMenu(false);
-              }}
-              className="px-2 py-1.5 rounded text-xs font-mono font-medium hover:bg-slate-800/60 border border-slate-700 flex items-center gap-1.5 text-slate-300"
-              title="Pilih Tata Letak Layar"
-            >
-              <LayoutGrid className="w-3.5 h-3.5 text-slate-400" />
-              <span>{layout}</span>
-              <span className="text-[9px] text-slate-500">▼</span>
-            </button>
-
-            {showLayoutMenu && (
-              <div className="absolute top-full left-0 mt-1.5 bg-slate-900 border border-slate-700 rounded-lg shadow-2xl py-1 z-50 min-w-[130px] text-xs">
-                <button
-                  onClick={() => {
-                    setLayout('1x1');
-                    setShowLayoutMenu(false);
-                  }}
-                  className={`w-full px-3 py-1.5 text-left flex items-center justify-between hover:bg-slate-800 ${
-                    layout === '1x1' ? 'text-cyan-400 font-bold bg-slate-800/60' : 'text-slate-300'
-                  }`}
+              {showLayoutMenu && (
+                <div 
+                  onClick={(e) => e.stopPropagation()}
+                  style={{ top: `${layoutMenuPos.top}px`, left: `${layoutMenuPos.left}px` }}
+                  className="fixed toolbar-dropdown-menu bg-slate-900 border border-slate-700 rounded-lg shadow-2xl py-1 z-[99999] min-w-[190px] text-xs backdrop-blur-md"
                 >
-                  <span>1×1 Tunggal</span>
-                  {layout === '1x1' && <Check className="w-3.5 h-3.5" />}
-                </button>
-                <button
-                  onClick={() => {
-                    setLayout('1x2');
-                    setShowLayoutMenu(false);
-                  }}
-                  className={`w-full px-3 py-1.5 text-left flex items-center justify-between hover:bg-slate-800 ${
-                    layout === '1x2' ? 'text-cyan-400 font-bold bg-slate-800/60' : 'text-slate-300'
-                  }`}
-                >
-                  <span>1×2 Dual (Asli vs AI)</span>
-                  {layout === '1x2' && <Check className="w-3.5 h-3.5" />}
-                </button>
-              </div>
-            )}
-          </div>
-
-          {/* 20. 3D Cube / MPR View */}
-          <button
-            onClick={() => setMprMode(prev => !prev)}
-            className={`p-1.5 rounded transition-all ${
-              mprMode ? 'bg-cyan-600/30 text-cyan-300 border border-cyan-500/40' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60 border border-transparent'
-            }`}
-            title="Mode 3D Multi-Planar Reconstruction (MPR)"
-          >
-            <Box className="w-4 h-4" />
-          </button>
-
-          {/* 21. Windowing Preset Selector ("Original v") */}
-          <div className="relative toolbar-dropdown">
-            <button
-              onClick={() => {
-                setShowPresetMenu(prev => !prev);
-                setShowLayoutMenu(false);
-              }}
-              className="px-2.5 py-1.5 rounded text-xs font-medium hover:bg-slate-800/60 border border-slate-700 flex items-center gap-1.5 text-slate-300"
-              title="Preset Windowing Radiologi"
-            >
-              <Sliders className="w-3.5 h-3.5 text-slate-400" />
-              <span>{WINDOW_PRESETS[activeWindowPreset]?.name || 'Original'}</span>
-              <span className="text-[9px] text-slate-500">▼</span>
-            </button>
-
-            {showPresetMenu && (
-              <div className="absolute top-full right-0 mt-1.5 bg-slate-900 border border-slate-700 rounded-lg shadow-2xl py-1 z-50 min-w-[170px] text-xs">
-                {Object.entries(WINDOW_PRESETS).map(([key, item]) => (
+                  <div className="px-3 py-1 text-[10px] uppercase font-bold text-slate-400 border-b border-slate-800">
+                    Tata Letak Viewport
+                  </div>
                   <button
-                    key={key}
-                    onClick={() => handleWindowPresetChange(key)}
-                    className={`w-full px-3 py-1.5 text-left flex items-center justify-between hover:bg-slate-800 ${
-                      activeWindowPreset === key ? 'text-cyan-400 font-bold bg-slate-800/60' : 'text-slate-300'
+                    onClick={() => {
+                      setLayout('1x1');
+                      setMprMode(false);
+                      setShowLayoutMenu(false);
+                      showToast('Tata Letak: 1×1 Tunggal (Aksial)');
+                    }}
+                    className={`w-full px-3 py-2 text-left flex items-center justify-between hover:bg-slate-800 transition ${
+                      layout === '1x1' && !mprMode ? 'text-cyan-400 font-bold bg-slate-800/80' : 'text-slate-300'
                     }`}
                   >
-                    <span>{item.name}</span>
-                    <span className="text-[10px] text-slate-500 font-mono">W:{item.width}</span>
+                    <div className="flex flex-col">
+                      <span>1×1 Tunggal</span>
+                      <span className="text-[10px] text-slate-500 font-normal">Irisan CT scan aksial penuh</span>
+                    </div>
+                    {layout === '1x1' && !mprMode && <Check className="w-4 h-4 text-cyan-400" />}
                   </button>
-                ))}
-              </div>
-            )}
+                  <button
+                    onClick={() => {
+                      setLayout('1x2');
+                      setMprMode(false);
+                      setShowLayoutMenu(false);
+                      showToast('Tata Letak: 1×2 Dual (Kiri CT Polos | Kanan Heatmap)');
+                    }}
+                    className={`w-full px-3 py-2 text-left flex items-center justify-between hover:bg-slate-800 transition ${
+                      layout === '1x2' ? 'text-blue-400 font-bold bg-slate-800/80' : 'text-slate-300'
+                    }`}
+                  >
+                    <div className="flex flex-col">
+                      <span>1×2 Dual Komparasi</span>
+                      <span className="text-[10px] text-slate-500 font-normal">Kiri: Polos | Kanan: Grad-CAM</span>
+                    </div>
+                    {layout === '1x2' && <Check className="w-4 h-4 text-blue-400" />}
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {/* 20. 3D Cube / MPR View (Multi-Planar Reconstruction) */}
+            <button
+              onClick={handleToggleMPR}
+              className={`p-1.5 rounded transition-all relative ${
+                mprMode 
+                  ? 'bg-cyan-600/40 text-cyan-200 border border-cyan-400 shadow-[0_0_12px_rgba(6,182,212,0.4)]' 
+                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60 border border-transparent'
+              }`}
+              title="Mode 3D Multi-Planar Reconstruction (MPR): Aksial, Sagital, dan Koronal"
+            >
+              <Box className="w-4 h-4" />
+              {mprMode && (
+                <span className="absolute -top-1 -right-1 flex h-2 w-2">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-cyan-400 opacity-75"></span>
+                  <span className="relative inline-flex rounded-full h-2 w-2 bg-cyan-500"></span>
+                </span>
+              )}
+            </button>
+
+            {/* 21. Windowing Preset Selector ("Original v") */}
+            <div className="relative toolbar-dropdown">
+              <button
+                onClick={handleOpenPresetMenu}
+                className={`toolbar-dropdown-btn px-2.5 py-1.5 rounded text-xs font-medium border flex items-center gap-1.5 transition-all ${
+                  activeWindowPreset !== 'original'
+                    ? 'bg-cyan-950/60 text-cyan-300 border-cyan-600/80 shadow-[0_0_8px_rgba(6,182,212,0.25)]'
+                    : 'bg-slate-900/80 hover:bg-slate-800 border-slate-700 text-slate-200'
+                }`}
+                title="Preset Windowing Radiologi (Klik untuk membuka menu atau ubah)"
+              >
+                <Sliders className="w-3.5 h-3.5 text-slate-400" />
+                <span>{WINDOW_PRESETS[activeWindowPreset]?.name || 'Original'}</span>
+                <span className="text-[9px] text-slate-400">▼</span>
+              </button>
+
+              {showPresetMenu && (
+                <div 
+                  onClick={(e) => e.stopPropagation()}
+                  style={{ top: `${presetMenuPos.top}px`, left: `${presetMenuPos.left}px` }}
+                  className="fixed toolbar-dropdown-menu bg-slate-900 border border-slate-700 rounded-lg shadow-2xl py-1 z-[99999] min-w-[210px] text-xs backdrop-blur-md"
+                >
+                  <div className="px-3 py-1 text-[10px] uppercase font-bold text-slate-400 border-b border-slate-800 flex items-center justify-between">
+                    <span>Preset Windowing (HU)</span>
+                    <button onClick={handleCyclePreset} className="text-cyan-400 hover:underline">Siklus Cepat</button>
+                  </div>
+                  {Object.entries(WINDOW_PRESETS).map(([key, item]) => (
+                    <button
+                      key={key}
+                      onClick={() => handleWindowPresetChange(key)}
+                      className={`w-full px-3 py-2 text-left flex items-center justify-between hover:bg-slate-800 transition ${
+                        activeWindowPreset === key ? 'text-cyan-400 font-bold bg-slate-800/80' : 'text-slate-300'
+                      }`}
+                    >
+                      <div className="flex flex-col">
+                        <span>{item.name}</span>
+                        <span className="text-[10px] text-slate-500 font-normal">{item.desc}</span>
+                      </div>
+                      <span className="text-[10px] text-slate-400 font-mono ml-2">
+                        L:{item.center}/W:{item.width}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+
           </div>
 
-        </div>
+          {/* Divider 3 */}
+          <div className="h-5 w-[1px] bg-slate-800 mx-1 flex-shrink-0" />
 
-        {/* Divider 3 */}
-        <div className="h-5 w-[1px] bg-slate-800 mx-1 flex-shrink-0" />
+          {/* Grup 4: Info DICOM (i) & Laporan Dokumen */}
+          <div className="flex items-center space-x-1 flex-shrink-0">
+            
+            {/* 22. Info DICOM Overlay */}
+            <button
+              onClick={() => setShowInfoOverlay(prev => !prev)}
+              className={`p-1.5 rounded transition-all ${
+                showInfoOverlay ? 'border border-cyan-500/40 text-cyan-300 bg-cyan-950/40' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60 border border-transparent'
+              }`}
+              title="Tampilkan / Sembunyikan Metadata DICOM"
+            >
+              <Info className="w-4 h-4" />
+            </button>
 
-        {/* Grup 4: Info DICOM (i) & Laporan Dokumen */}
-        <div className="flex items-center space-x-1 flex-shrink-0">
-          
-          {/* 22. Info DICOM Overlay */}
-          <button
-            onClick={() => setShowInfoOverlay(prev => !prev)}
-            className={`p-1.5 rounded transition-all ${
-              showInfoOverlay ? 'border border-cyan-500/40 text-cyan-300 bg-cyan-950/40' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60 border border-transparent'
-            }`}
-            title="Tampilkan / Sembunyikan Metadata DICOM"
-          >
-            <Info className="w-4 h-4" />
-          </button>
+            {/* 23. Salin / Transfer Pengukuran ke Laporan Radiologi */}
+            <button
+              onClick={() => setShowReportModal(true)}
+              className="p-1.5 rounded border border-transparent text-slate-400 hover:text-cyan-300 hover:bg-slate-800/60 transition-all relative"
+              title="Ringkasan Anotasi untuk Laporan Radiologi"
+            >
+              <FileText className="w-4 h-4" />
+              {measurements.length > 0 && (
+                <span className="absolute -top-1 -right-1 w-2.5 h-2.5 rounded-full bg-emerald-500 ring-2 ring-slate-900" />
+              )}
+            </button>
 
-          {/* 23. Salin / Transfer Pengukuran ke Laporan Radiologi */}
-          <button
-            onClick={() => setShowReportModal(true)}
-            className="p-1.5 rounded border border-transparent text-slate-400 hover:text-cyan-300 hover:bg-slate-800/60 transition-all relative"
-            title="Ringkasan Anotasi untuk Laporan Radiologi"
-          >
-            <FileText className="w-4 h-4" />
-            {measurements.length > 0 && (
-              <span className="absolute -top-1 -right-1 w-2.5 h-2.5 rounded-full bg-emerald-500 ring-2 ring-slate-900" />
-            )}
-          </button>
+          </div>
 
         </div>
 
       </div>
 
-      {/* ================= 2. STATUS BAR KECIL (Zoom %, Tool Aktif, Irisan) ================= */}
+      {/* ================= 2. STATUS BAR KECIL (Zoom %, Tool Aktif, Irisan, Windowing) ================= */}
       <div className="bg-[#0A1020] px-4 py-1.5 flex items-center justify-between text-[11px] font-mono border-b border-slate-800/80 text-cyan-400">
         <div className="flex items-center space-x-3 overflow-hidden">
           <span className="text-slate-400">
@@ -1263,7 +1462,7 @@ export default function MedicalViewer({
           </span>
           <span className="text-slate-600 hidden sm:inline">•</span>
           <span className="text-slate-400 hidden sm:inline">
-            Rotasi: <strong className="text-cyan-300">{rotation}°</strong>
+            Window: <strong className="text-cyan-300">{WINDOW_PRESETS[activeWindowPreset]?.name || 'Custom'}</strong> (C:{WINDOW_PRESETS[activeWindowPreset]?.center || brightness}/W:{WINDOW_PRESETS[activeWindowPreset]?.width || contrast})
           </span>
           {measurements.length > 0 && (
             <>
@@ -1276,8 +1475,8 @@ export default function MedicalViewer({
           {mprMode && (
             <>
               <span className="text-slate-600">•</span>
-              <span className="text-purple-400 font-bold bg-purple-950/60 px-1.5 py-0.5 rounded border border-purple-800">
-                Mode MPR Aktif (Aksial)
+              <span className="text-cyan-300 font-bold bg-cyan-950/80 px-2 py-0.5 rounded border border-cyan-700 animate-pulse">
+                Mode MPR 3D Aktif (Aksial • Sagital • Koronal)
               </span>
             </>
           )}
@@ -1298,6 +1497,14 @@ export default function MedicalViewer({
         className="relative flex-1 flex items-center justify-center bg-black overflow-hidden min-h-[440px]"
         style={{ cursor: getCursorStyle() }}
       >
+        {/* Floating Notification Toast */}
+        {toastNotification && (
+          <div className="absolute top-3 left-1/2 -translate-x-1/2 z-50 bg-slate-900/95 border border-cyan-500/80 text-cyan-200 px-4 py-2 rounded-xl text-xs font-semibold shadow-2xl backdrop-blur-md flex items-center gap-2 animate-in fade-in slide-in-from-top-2">
+            <Sparkles className="w-4 h-4 text-cyan-400 animate-spin" style={{ animationDuration: '3s' }} />
+            <span>{toastNotification}</span>
+          </div>
+        )}
+
         {isLoading && (
           <div className="absolute top-3 right-3 z-30 bg-slate-900/90 border border-cyan-800 px-3 py-1 rounded text-xs text-cyan-400 flex items-center gap-2 backdrop-blur-sm pointer-events-none font-mono">
             <span className="w-2 h-2 rounded-full bg-cyan-400 animate-ping" />
@@ -1305,8 +1512,161 @@ export default function MedicalViewer({
           </div>
         )}
 
-        {/* ================= TATA LETAK 1x1: SINGLE VIEWPORT ================= */}
-        {layout === '1x1' && (
+        {/* ================= TAMPILAN 1: MODE 3D MPR (MULTI-PLANAR RECONSTRUCTION) ================= */}
+        {mprMode ? (
+          <div className="w-full h-full grid grid-cols-1 md:grid-cols-12 gap-2 p-2">
+            
+            {/* Panel Kiri (8 Kolom): Bidang Aksial Utama dengan Garis Scout Reference */}
+            <div className="md:col-span-8 relative bg-slate-950 rounded-lg border border-cyan-900/60 flex items-center justify-center overflow-hidden">
+              <div className="absolute top-2 left-2 z-20 text-[10px] font-mono bg-slate-900/90 text-cyan-300 px-2 py-0.5 rounded border border-cyan-800 flex items-center gap-1.5">
+                <Box className="w-3 h-3 text-cyan-400" />
+                <span>1. Aksial (Axial Plane) - Irisan #{currentSlice}</span>
+              </div>
+              <div 
+                ref={viewportRef}
+                onMouseDown={handleMouseDown}
+                onMouseMove={handleMouseMove}
+                onMouseUp={handleMouseUp}
+                onMouseLeave={handleMouseUp}
+                onDoubleClick={handleResetView}
+                className="relative w-[480px] h-[480px] flex items-center justify-center select-none"
+                style={{
+                  transform: `translate(${pan.x}px, ${pan.y}px) scale(${scale * 0.9}) rotate(${rotation}deg) scaleX(${flipH ? -1 : 1}) scaleY(${flipV ? -1 : 1})`,
+                  filter: `${invert ? 'invert(1)' : ''} contrast(${contrast}%) brightness(${brightness}%)`,
+                  transformOrigin: 'center center'
+                }}
+              >
+                <img src={sliceImageUrl} alt="CT Aksial" className="w-[480px] h-[480px] object-contain pointer-events-none" />
+                {renderSvgOverlay(true)}
+              </div>
+            </div>
+
+            {/* Panel Kanan (4 Kolom): Rekonstruksi Sagital & Koronal */}
+            <div className="md:col-span-4 flex flex-col gap-2">
+              
+              {/* Bidang Sagital (Tampak Samping) */}
+              <div className="flex-1 relative bg-slate-950 rounded-lg border border-amber-900/50 flex flex-col items-center justify-center overflow-hidden p-2">
+                <div className="absolute top-1.5 left-2 z-20 text-[9px] font-mono bg-amber-950/90 text-amber-300 px-1.5 py-0.5 rounded border border-amber-800">
+                  2. Sagital (Tampak Samping)
+                </div>
+                {/* SVG Visualisasi Siluet Sagital Medis dengan Indikator Irisan Bergerak Real-time */}
+                <div className="relative w-full h-full max-h-[190px] flex items-center justify-center">
+                  <svg viewBox="0 0 200 160" className="w-full h-full max-h-[180px]">
+                    {/* Siluet Anatomi Otak Samping */}
+                    <path 
+                      d="M 60 135 C 30 120 25 80 40 50 C 55 20 120 15 150 40 C 175 60 180 100 160 125 C 145 140 125 140 110 135 C 95 130 80 145 60 135 Z" 
+                      fill="rgba(30, 41, 59, 0.7)" stroke="#64748B" strokeWidth="1.5"
+                    />
+                    {/* Tulang Kalvaria Luar */}
+                    <path 
+                      d="M 58 138 C 26 122 20 78 36 46 C 52 14 122 9 154 36 C 180 58 185 102 164 128 C 148 144 127 144 112 138 C 96 132 80 148 58 138 Z" 
+                      fill="none" stroke="#94A3B8" strokeWidth="2.5" opacity="0.5"
+                    />
+                    {/* Lesi ICH jika ada di level irisan */}
+                    <ellipse cx="115" cy="75" rx="14" ry="10" fill="rgba(239, 68, 68, 0.45)" stroke="#EF4444" strokeWidth="1" />
+                    
+                    {/* Garis Lokator Irisan Aktif (Kuning Bergerak Vertikal mengikuti slice) */}
+                    {(() => {
+                      const sliceRatio = Math.max(0, Math.min(1, currentSlice / Math.max(1, totalSlices - 1)));
+                      // Level Z dari bawah (135) ke puncak (25)
+                      const currentY = 135 - sliceRatio * 110;
+                      return (
+                        <g>
+                          <line x1="15" y1={currentY} x2="185" y2={currentY} stroke="#FBBF24" strokeWidth="2" strokeDasharray="3 2" />
+                          <circle cx="185" cy={currentY} r="3" fill="#FBBF24" />
+                          <text x="190" y={currentY + 3} fill="#FDE047" fontSize="8" fontFamily="monospace">#{currentSlice}</text>
+                        </g>
+                      );
+                    })()}
+                  </svg>
+                  <span className="absolute bottom-1 right-2 text-[9px] font-mono text-slate-500">A ◄ ► P</span>
+                </div>
+              </div>
+
+              {/* Bidang Koronal (Tampak Depan) */}
+              <div className="flex-1 relative bg-slate-950 rounded-lg border border-cyan-900/50 flex flex-col items-center justify-center overflow-hidden p-2">
+                <div className="absolute top-1.5 left-2 z-20 text-[9px] font-mono bg-cyan-950/90 text-cyan-300 px-1.5 py-0.5 rounded border border-cyan-800">
+                  3. Koronal (Tampak Depan)
+                </div>
+                {/* SVG Visualisasi Siluet Koronal Medis */}
+                <div className="relative w-full h-full max-h-[190px] flex items-center justify-center">
+                  <svg viewBox="0 0 200 160" className="w-full h-full max-h-[180px]">
+                    {/* Siluet Anatomi Wajah/Kepala Depan */}
+                    <path 
+                      d="M 50 135 C 30 110 30 50 60 30 C 90 10 110 10 140 30 C 170 50 170 110 150 135 C 130 145 70 145 50 135 Z" 
+                      fill="rgba(30, 41, 59, 0.7)" stroke="#64748B" strokeWidth="1.5"
+                    />
+                    <path 
+                      d="M 47 138 C 26 112 26 48 58 26 C 89 5 111 5 142 26 C 174 48 174 112 153 138 C 132 149 68 149 47 138 Z" 
+                      fill="none" stroke="#94A3B8" strokeWidth="2.5" opacity="0.5"
+                    />
+                    {/* Lesi ICH di Hemisfer Kiri Pasien (Sisi Kanan Gambar) */}
+                    <ellipse cx="125" cy="72" rx="12" ry="12" fill="rgba(239, 68, 68, 0.45)" stroke="#EF4444" strokeWidth="1" />
+                    
+                    {/* Garis Lokator Irisan Aktif */}
+                    {(() => {
+                      const sliceRatio = Math.max(0, Math.min(1, currentSlice / Math.max(1, totalSlices - 1)));
+                      const currentY = 135 - sliceRatio * 110;
+                      return (
+                        <g>
+                          <line x1="15" y1={currentY} x2="185" y2={currentY} stroke="#06B6D4" strokeWidth="2" strokeDasharray="3 2" />
+                          <circle cx="185" cy={currentY} r="3" fill="#06B6D4" />
+                          <text x="190" y={currentY + 3} fill="#67E8F9" fontSize="8" fontFamily="monospace">#{currentSlice}</text>
+                        </g>
+                      );
+                    })()}
+                  </svg>
+                  <span className="absolute bottom-1 right-2 text-[9px] font-mono text-slate-500">R ◄ ► L</span>
+                </div>
+              </div>
+
+            </div>
+
+          </div>
+        ) : layout === '1x2' ? (
+          /* ================= TAMPILAN 2: TATA LETAK 1x2 DUAL SYNCHRONIZED (ASLI vs HEATMAP) ================= */
+          <div className="w-full h-full grid grid-cols-1 md:grid-cols-2 gap-2 p-2">
+            
+            {/* Viewport Kiri: Citra CT Polos (Raw Non-Kontras) */}
+            <div className="relative bg-black rounded-lg border border-slate-800 flex items-center justify-center overflow-hidden">
+              <div className="absolute top-2 left-2 z-20 text-[10px] font-mono bg-slate-900/90 text-slate-200 px-2 py-0.5 rounded border border-slate-700">
+                1. Citra CT Polos (Raw HU)
+              </div>
+              <div 
+                className="relative w-[512px] h-[512px] flex items-center justify-center select-none"
+                style={{
+                  transform: `translate(${pan.x}px, ${pan.y}px) scale(${scale * 0.76}) rotate(${rotation}deg) scaleX(${flipH ? -1 : 1}) scaleY(${flipV ? -1 : 1})`,
+                  filter: `${invert ? 'invert(1)' : ''} contrast(${contrast}%) brightness(${brightness}%)`,
+                  transformOrigin: 'center center'
+                }}
+              >
+                <img src={plainSliceUrl} alt="CT Asli" className="w-[512px] h-[512px] object-contain pointer-events-none" />
+                {renderSvgOverlay()}
+              </div>
+            </div>
+
+            {/* Viewport Kanan: Citra CT + Grad-CAM Heatmap */}
+            <div className="relative bg-black rounded-lg border border-red-950/70 flex items-center justify-center overflow-hidden">
+              <div className="absolute top-2 left-2 z-20 text-[10px] font-mono bg-red-950/90 text-red-300 px-2 py-0.5 rounded border border-red-800 flex items-center gap-1.5">
+                <Flame className="w-3 h-3 text-red-400" />
+                <span>2. AI Grad-CAM Overlay (Lesi Hemoragik)</span>
+              </div>
+              <div 
+                className="relative w-[512px] h-[512px] flex items-center justify-center select-none"
+                style={{
+                  transform: `translate(${pan.x}px, ${pan.y}px) scale(${scale * 0.76}) rotate(${rotation}deg) scaleX(${flipH ? -1 : 1}) scaleY(${flipV ? -1 : 1})`,
+                  filter: `${invert ? 'invert(1)' : ''} contrast(${contrast}%) brightness(${brightness}%)`,
+                  transformOrigin: 'center center'
+                }}
+              >
+                <img src={sliceImageUrl} alt="CT Heatmap" className="w-[512px] h-[512px] object-contain pointer-events-none" />
+                {renderSvgOverlay()}
+              </div>
+            </div>
+
+          </div>
+        ) : (
+          /* ================= TAMPILAN 3: TATA LETAK 1x1 STANDAR TUNGGAL ================= */
           <div 
             ref={viewportRef}
             onMouseDown={handleMouseDown}
@@ -1337,49 +1697,8 @@ export default function MedicalViewer({
           </div>
         )}
 
-        {/* ================= TATA LETAK 1x2: DUAL SYNCHRONIZED (ASLI vs HEATMAP) ================= */}
-        {layout === '1x2' && (
-          <div className="w-full h-full grid grid-cols-2 gap-2 p-2">
-            {/* Viewport Kiri: Citra CT Asli (Tanpa Heatmap) */}
-            <div className="relative bg-black rounded-lg border border-slate-800 flex items-center justify-center overflow-hidden">
-              <div className="absolute top-2 left-2 z-20 text-[10px] font-mono bg-slate-900/80 text-slate-300 px-2 py-0.5 rounded border border-slate-700">
-                1. Citra CT Polos (Raw HU)
-              </div>
-              <div 
-                className="relative w-[512px] h-[512px] flex items-center justify-center select-none"
-                style={{
-                  transform: `translate(${pan.x}px, ${pan.y}px) scale(${scale * 0.78}) rotate(${rotation}deg) scaleX(${flipH ? -1 : 1}) scaleY(${flipV ? -1 : 1})`,
-                  filter: `${invert ? 'invert(1)' : ''} contrast(${contrast}%) brightness(${brightness}%)`,
-                  transformOrigin: 'center center'
-                }}
-              >
-                <img src={plainSliceUrl} alt="CT Asli" className="w-[512px] h-[512px] object-contain pointer-events-none" />
-                {renderSvgOverlay()}
-              </div>
-            </div>
-
-            {/* Viewport Kanan: Citra CT + Grad-CAM Heatmap */}
-            <div className="relative bg-black rounded-lg border border-red-950/60 flex items-center justify-center overflow-hidden">
-              <div className="absolute top-2 left-2 z-20 text-[10px] font-mono bg-red-950/90 text-red-300 px-2 py-0.5 rounded border border-red-800">
-                2. AI Grad-CAM Overlay (Lesi Hemoragik)
-              </div>
-              <div 
-                className="relative w-[512px] h-[512px] flex items-center justify-center select-none"
-                style={{
-                  transform: `translate(${pan.x}px, ${pan.y}px) scale(${scale * 0.78}) rotate(${rotation}deg) scaleX(${flipH ? -1 : 1}) scaleY(${flipV ? -1 : 1})`,
-                  filter: `${invert ? 'invert(1)' : ''} contrast(${contrast}%) brightness(${brightness}%)`,
-                  transformOrigin: 'center center'
-                }}
-              >
-                <img src={sliceImageUrl} alt="CT Heatmap" className="w-[512px] h-[512px] object-contain pointer-events-none" />
-                {renderSvgOverlay()}
-              </div>
-            </div>
-          </div>
-        )}
-
         {/* Marker Orientasi Anatomis Radiologi (A, P, R, L) */}
-        {showInfoOverlay && (
+        {showInfoOverlay && !mprMode && (
           <>
             <div className="absolute top-2 left-1/2 -translate-x-1/2 text-cyan-400 font-mono font-bold text-xs tracking-widest pointer-events-none z-20 drop-shadow">
               A (Anterior)
@@ -1398,12 +1717,12 @@ export default function MedicalViewer({
 
         {/* Metadata Teknis DICOM di Pojok Layar */}
         {showInfoOverlay && (
-          <div className="absolute top-3 left-3 text-[11px] font-mono text-cyan-400/90 pointer-events-none z-20 space-y-0.5 bg-slate-950/75 p-2 rounded border border-slate-800/80 backdrop-blur-sm">
+          <div className="absolute top-3 left-3 text-[11px] font-mono text-cyan-400/90 pointer-events-none z-20 space-y-0.5 bg-slate-950/80 p-2 rounded-lg border border-slate-800/80 backdrop-blur-sm shadow-lg">
             <p className="m-0 font-bold text-slate-200">CT Kepala Aksial Non-Kontras</p>
             <p className="m-0 text-slate-400">Matrix: 512×512 • Tebal: 2.5 mm</p>
             <p className="m-0 text-slate-400">FOV: ~230 mm (0.45 mm/px)</p>
             <p className="m-0 text-cyan-300">
-              WL: {WINDOW_PRESETS[activeWindowPreset]?.center || brightness} / WW: {WINDOW_PRESETS[activeWindowPreset]?.width || contrast}
+              WL: {WINDOW_PRESETS[activeWindowPreset]?.center || brightness} / WW: {WINDOW_PRESETS[activeWindowPreset]?.width || contrast} ({WINDOW_PRESETS[activeWindowPreset]?.name || 'Custom'})
             </p>
           </div>
         )}
@@ -1428,7 +1747,7 @@ export default function MedicalViewer({
         </button>
       </div>
 
-      {/* ================= 4. PANEL KONTROL BAWAH (SLIDER, HEATMAP, IRISAN KUNCI) ================= */}
+      {/* ================= 4. PANEL KONTROL BAWAH (SLIDER, HEATMAP, IRISAN KUNCI, RESET) ================= */}
       <div className="p-3 bg-[#0D1527] border-t border-slate-800/90 space-y-2.5">
         
         {/* Baris 1: Kontrol Heatmap & Slider Irisan */}
@@ -1500,7 +1819,7 @@ export default function MedicalViewer({
 
         </div>
 
-        {/* Baris 2: Pintasan Irisan Kunci & Ringkasan Pengukuran */}
+        {/* Baris 2: Pintasan Irisan Kunci, Hasil Pengukuran, dan Tombol Reset Semua */}
         <div className="flex flex-wrap items-center justify-between gap-2 pt-1 border-t border-slate-800/60">
           
           {/* Tombol Irisan Kunci (Key Slices) */}
