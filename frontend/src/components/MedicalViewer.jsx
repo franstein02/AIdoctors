@@ -172,13 +172,31 @@ export default function MedicalViewer({
     }
   }, [initialSlice, studyUid]);
 
-  // Debounce 40ms untuk irisan agar slider responsif 60fps
+  // Debounce 25ms untuk irisan agar slider responsif 60fps
   useEffect(() => {
     const timer = setTimeout(() => {
       setDebouncedSlice(currentSlice);
-    }, 40);
+    }, 25);
     return () => clearTimeout(timer);
   }, [currentSlice]);
+
+  // Preloading prediktif irisan sekitar (±1, ±2, ±3) ke cache browser agar scrubbing instan tanpa jeda
+  useEffect(() => {
+    if (!studyUid || totalSlices <= 1) return;
+    const slicesToPreload = [
+      currentSlice - 1,
+      currentSlice + 1,
+      currentSlice - 2,
+      currentSlice + 2,
+      currentSlice - 3,
+      currentSlice + 3,
+    ].filter(s => s >= 0 && s < totalSlices);
+
+    slicesToPreload.forEach(s => {
+      const img = new Image();
+      img.src = `${API_BASE_URL}/cases/${encodeURIComponent(studyUid)}/slice?index=${s}&gradcam=${showGradcam}&opacity=${debouncedOpacity}`;
+    });
+  }, [debouncedSlice, studyUid, totalSlices, showGradcam, debouncedOpacity]);
 
   // Debounce 50ms untuk opasitas heatmap
   useEffect(() => {

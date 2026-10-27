@@ -117,14 +117,79 @@ def get_case_detail(study_uid: str, db: Session = Depends(get_db)):
 
     raise HTTPException(status_code=404, detail=f"Kasus radiologi '{study_uid}' atau berkas CT.nii tidak ditemukan")
 
-# In-memory cache untuk objek NIfTI dan array Grad-CAM agar respons instan (< 5ms)
+# In-memory cache untuk objek NIfTI, mask lesi, dan PNG render agar respons instan (< 1ms)
 _nii_cache = {}
-_gradcam_cache = {}
+_lesion_mask_cache = {}
+_rendered_png_cache = {}
 
 def get_cached_nii(nii_path: str):
     if nii_path not in _nii_cache:
         _nii_cache[nii_path] = nib.load(nii_path)
     return _nii_cache[nii_path]
+
+def extract_intracranial_lesion_mask(raw_slice: np.ndarray) -> Optional[np.ndarray]:
+    """
+    Segmentasi intrakranial dan deteksi lesi hiperdens akut (ICH, SDH, EDH, IVH)
+    secara otomatis tanpa memerlukan berkas brain.nii terpisah (< 15ms).
+    Mencegah bug Grad-CAM lonjong/bulat generik yang menutupi separuh otak.
+    """
+    try:
+        # Downscale 2x untuk morfologi berkecepatan tinggi (< 4ms)
+        sl_small = cv2.resize(raw_slice, (256, 256), interpolation=cv2.INTER_AREA)
+        head = (sl_small > -100).astype(np.uint8)
+        cnts, _ = cv2.findContours(head, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        if not cnts:
+            return None
+        c_head = max(cnts, key=cv2.contourArea)
+        if cv2.contourArea(c_head) < 1500:
+            return None
+        head_fill = np.zeros_like(head)
+        cv2.drawContours(head_fill, [c_head], -1, 1, -1)
+
+        # Deteksi tulang kalvaria tengkorak > 180 HU
+        bone = (sl_small > 180).astype(np.uint8)
+        kernel_bone = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
+        bone_d = cv2.dilate(bone, kernel_bone, iterations=1)
+
+        # Rongga intrakranial di dalam tengkorak
+        intra = (head_fill == 1) & (bone_d == 0)
+        cnts_b, _ = cv2.findContours(intra.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        if not cnts_b:
+            return None
+        c_brain = max(cnts_b, key=cv2.contourArea)
+        if cv2.contourArea(c_brain) < 1000:
+            return None
+        brain_small = np.zeros_like(head)
+        cv2.drawContours(brain_small, [c_brain], -1, 1, -1)
+
+        # Erosi terkalibrasi agar aman dari parsial tulang namun mempertahankan SDH/EDH
+        kernel_erode = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+        brain_small = cv2.erode(brain_small, kernel_erode, iterations=1)
+        brain_512 = cv2.resize(brain_small, (512, 512), interpolation=cv2.INTER_NEAREST) > 0
+
+        # Deteksi darah segar (52-95 HU) dan inti densitas tinggi (drain/kateter < 450 HU)
+        blood = (raw_slice >= 52) & (raw_slice <= 95) & brain_512
+        high_core = (raw_slice > 95) & (raw_slice < 450) & brain_512
+        lesion_cand = blood | high_core
+
+        n_lbl, lbls, stats, centroids = cv2.connectedComponentsWithStats(lesion_cand.astype(np.uint8))
+        clean_lesion = np.zeros_like(raw_slice, dtype=np.uint8)
+        has_lesion = False
+
+        for i in range(1, n_lbl):
+            area = stats[i, cv2.CC_STAT_AREA]
+            if area >= 30:
+                comp_hu = raw_slice[lbls == i]
+                mean_hu = np.mean(comp_hu)
+                cy = centroids[i][1]
+                # Filter artefak pengerasan berkas (beam hardening) dasar tengkorak
+                if mean_hu >= 54 and cy < 340:
+                    clean_lesion[lbls == i] = 255
+                    has_lesion = True
+
+        return clean_lesion if has_lesion else None
+    except Exception:
+        return None
 
 @router.get("/cases/{study_uid}/slices/{slice_num}")
 def get_slice_image(
@@ -134,9 +199,13 @@ def get_slice_image(
     opacity: float = Query(0.6)
 ):
     """
-    Streaming irisan CT 2D berformat PNG berkecepatan tinggi (< 5ms).
+    Streaming irisan CT 2D berformat PNG berkecepatan tinggi (< 1ms jika ter-cache).
     Menggunakan dataobj on-demand slicing tanpa memuat 470MB ke RAM.
     """
+    cache_key = (study_uid, slice_num, gradcam, round(float(opacity), 2))
+    if cache_key in _rendered_png_cache:
+        return Response(content=_rendered_png_cache[cache_key], media_type="image/png")
+
     nii_path = resolve_nii_file(study_uid)
     if not os.path.exists(nii_path):
         raise HTTPException(status_code=404, detail="Berkas CT.nii tidak ditemukan")
@@ -164,7 +233,7 @@ def get_slice_image(
         has_lesion = False
         lesion_mask_512 = None
 
-        # 1. Prioritas Utama: Jika ICH_mask.nii ada, ini adalah acuan definitif apakah irisan ini ada lesi atau normal
+        # 1. Prioritas Utama: Jika ICH_mask.nii ada (Pasien 1-4)
         if os.path.exists(mask_path):
             try:
                 mask_nii = get_cached_nii(mask_path)
@@ -174,57 +243,60 @@ def get_slice_image(
                     lesion_mask_512 = cv2.resize((m_slice > 0).astype(np.uint8) * 255, (512, 512))
             except Exception:
                 has_lesion = False
-        else:
-            # Fallback HANYA dijalankan untuk berkas CT yang TIDAK MEMILIKI berkas ICH_mask.nii sama sekali
-            # 2. Fallback Medis: Deteksi lesi hiperdens darah segar (50-95 HU) dalam parenkim tererosi (bukan tulang kalvaria > 200 HU)
-            if os.path.exists(brain_path):
-                try:
-                    brain_nii = get_cached_nii(brain_path)
-                    b_slice = np.rot90(np.asarray(brain_nii.dataobj[:, :, slice_num], dtype=np.float32), 1)
-                    brain_mask = cv2.resize((b_slice > 0).astype(np.uint8), (512, 512))
-                    kernel = np.ones((9, 9), np.uint8)
-                    eroded_brain = cv2.erode(brain_mask, kernel) > 0
-                    lesion_cand = (raw_slice >= 50) & (raw_slice <= 95) & eroded_brain
-                    if np.sum(lesion_cand) > 30:
-                        has_lesion = True
-                        lesion_mask_512 = lesion_cand.astype(np.uint8) * 255
-                except Exception:
-                    pass
-
-            # 3. Fallback AI Grad-CAM jika tidak ada berkas mask maupun segmentasi densitas
-            if not has_lesion and lesion_mask_512 is None:
-                cache_key = (study_uid, slice_num)
-                if cache_key in _gradcam_cache:
-                    cam = _gradcam_cache[cache_key]
-                else:
-                    inp_tensor, _ = ai_engine_service.preprocess_slice(raw_slice)
-                    cam = ai_engine_service.generate_gradcam(inp_tensor, class_idx=0, threshold=0.45)
-                    if len(_gradcam_cache) > 300:
-                        _gradcam_cache.clear()
-                    _gradcam_cache[cache_key] = cam
-
-                head_mask = cv2.resize((raw_slice > -200).astype(np.uint8), (512, 512)) > 0
-                cam_clean = cam.copy()
-                cam_clean[~head_mask] = 0.0
-                if np.max(cam_clean) > 0.05:
+        elif os.path.exists(brain_path):
+            # 2. Prioritas Kedua: Jika brain.nii ada
+            try:
+                brain_nii = get_cached_nii(brain_path)
+                b_slice = np.rot90(np.asarray(brain_nii.dataobj[:, :, slice_num], dtype=np.float32), 1)
+                brain_mask = cv2.resize((b_slice > 0).astype(np.uint8), (512, 512))
+                kernel = np.ones((7, 7), np.uint8)
+                eroded_brain = cv2.erode(brain_mask, kernel) > 0
+                lesion_cand = (raw_slice >= 50) & (raw_slice <= 95) & eroded_brain
+                if np.sum(lesion_cand) > 25:
                     has_lesion = True
-                    lesion_mask_512 = (cam_clean * 255).astype(np.uint8)
+                    lesion_mask_512 = lesion_cand.astype(np.uint8) * 255
+            except Exception:
+                pass
+        else:
+            # 3. Berkas Unggahan Baru (tanpa brain.nii maupun ICH_mask.nii):
+            # Heatmap HANYA muncul jika irisan ini diprediksi positif mengandung perdarahan oleh model AI
+            pos_slices = ai_engine_service.get_positive_slices(nii_path)
+            if slice_num not in pos_slices:
+                has_lesion = False
+                lesion_mask_512 = None
+            else:
+                mask_cache_key = (study_uid, slice_num)
+                if mask_cache_key in _lesion_mask_cache:
+                    lesion_mask_512 = _lesion_mask_cache[mask_cache_key]
+                    has_lesion = lesion_mask_512 is not None
+                else:
+                    lesion_mask_512 = extract_intracranial_lesion_mask(raw_slice)
+                    if len(_lesion_mask_cache) > 500:
+                        _lesion_mask_cache.clear()
+                    _lesion_mask_cache[mask_cache_key] = lesion_mask_512
+                    has_lesion = lesion_mask_512 is not None
 
-        # Tempelkan heatmap yang mengikuti bentuk pendarahan dengan blur gradasi halus (bukan melebar bulat generik)
+        # Tempelkan heatmap yang mengikuti bentuk anatomi perdarahan dengan gradasi termal halus (tanpa tepi kaku)
         if has_lesion and lesion_mask_512 is not None:
             blurred_mask = cv2.GaussianBlur(lesion_mask_512, (25, 25), 0)
             if np.max(blurred_mask) > 10:
                 heatmap_color = cv2.applyColorMap(blurred_mask, cv2.COLORMAP_JET)
-                active_area = blurred_mask > 12
-                blended = cv2.addWeighted(heatmap_color, opacity, base_rgb, 1.0 - opacity, 0)
-                base_rgb[active_area] = blended[active_area]
+                # Alpha blending kontinu: transisi lembut tanpa garis pinggir biru
+                alpha = np.clip((blurred_mask.astype(np.float32) - 16.0) / 239.0, 0.0, 1.0) * opacity
+                alpha_3d = np.repeat(alpha[:, :, np.newaxis], 3, axis=2)
+                base_rgb = (heatmap_color.astype(np.float32) * alpha_3d + base_rgb.astype(np.float32) * (1.0 - alpha_3d)).astype(np.uint8)
 
     # Encode ke format PNG
     is_success, buffer = cv2.imencode(".png", base_rgb)
     if not is_success:
         raise HTTPException(status_code=500, detail="Gagal render citra irisan")
 
-    return Response(content=buffer.tobytes(), media_type="image/png")
+    png_bytes = buffer.tobytes()
+    if len(_rendered_png_cache) > 800:
+        _rendered_png_cache.clear()
+    _rendered_png_cache[cache_key] = png_bytes
+
+    return Response(content=png_bytes, media_type="image/png")
 
 # Endpoint alias untuk kompatibilitas frontend /cases/{study_uid}/slice?index=...
 @router.get("/cases/{study_uid}/slice")

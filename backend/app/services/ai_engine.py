@@ -120,11 +120,12 @@ class AIEngine:
         if np.max(cam_smooth) > 0:
             cam_smooth = cam_smooth / np.max(cam_smooth)
 
-        # 3. Soft-thresholding (ramp halus) menggantikan pemotongan biner kaku
-        cam_soft = np.clip((cam_smooth - threshold) / (1.0 - threshold + 1e-6), 0.0, 1.0)
+        # 3. Continuous power-law focus: kurva peluruhan eksponensial lembut
+        # Mengeliminasi artefak batas oval/poligon tanpa memotong tajam level set
+        cam_focused = np.power(np.clip(cam_smooth, 0.0, 1.0), 2.2)
 
-        # 4. Gaussian blur sekunder untuk gradasi organik
-        cam_final = cv2.GaussianBlur(cam_soft, (25, 25), 0)
+        # 4. Gaussian blur sekunder untuk gradasi termal organik
+        cam_final = cv2.GaussianBlur(cam_focused, (25, 25), 0)
         if np.max(cam_final) > 0:
             cam_final = cam_final / np.max(cam_final)
 
@@ -236,6 +237,17 @@ class AIEngine:
                 f"Dugaan AI, bukan diagnosis. Wajib konfirmasi dokter spesialis radiologi."
             )
 
+        # Identifikasi daftar irisan yang diprediksi positif mengandung lesi perdarahan oleh model AI
+        positive_slices = set()
+        if tier == "MERAH":
+            for idx, probs in zip(indices, slice_probs):
+                if float(probs[0]) >= 0.50 or float(np.max(probs[1:])) >= 0.38:
+                    for s in range(max(0, idx - step), min(total_slices, idx + step + 1)):
+                        positive_slices.add(s)
+            if mask_top_slices:
+                for mts in mask_top_slices:
+                    positive_slices.add(mts)
+
         res = {
             "skor_studi": round(skor_studi, 2),
             "skor_subtipe": {k: round(v, 2) for k, v in skor_subtipe.items()},
@@ -243,10 +255,19 @@ class AIEngine:
             "irisan_kunci": sorted(top_indices),
             "top_slice_idx": top_slice_idx,
             "total_slices": total_slices,
+            "positive_slices": sorted(list(positive_slices)),
             "draf_laporan": draf_laporan
         }
         self._volume_cache[abs_nii_path] = res
         return res
+
+    def get_positive_slices(self, nii_path: str) -> set:
+        """Mengembalikan set nomor irisan yang diprediksi mengandung lesi oleh AI."""
+        abs_nii_path = os.path.abspath(nii_path)
+        if abs_nii_path in self._volume_cache:
+            return set(self._volume_cache[abs_nii_path].get("positive_slices", []))
+        analysis = self.analyze_nii_volume(nii_path)
+        return set(analysis.get("positive_slices", []))
 
     # Metode Kompatibilitas untuk Endpoint Lama
     def infer_slice(self, raw_slice: np.ndarray, target_subtypes: Optional[List[str]] = None) -> Dict[str, Any]:
